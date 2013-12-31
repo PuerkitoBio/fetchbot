@@ -20,6 +20,9 @@ var (
 )
 
 type Visitor interface {
+	// TODO : This won't work, the whole point to having the Requester interface
+	// is so that it is possible to use a struct with custom data, and that information
+	// is lost with those parameters.
 	Visit(res *http.Response, req *http.Request, err error)
 }
 
