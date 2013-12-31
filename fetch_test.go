@@ -6,14 +6,18 @@ import (
 )
 
 func TestFetcher(t *testing.T) {
-	urls := []string{"http://toto.com", "https://google.com"}
+	urls := []string{"http://0value.com", "https://google.com"}
 	f := New(nil, -1)
-	ch := f.Start()
+	f.Start()
 	for _, u := range urls {
 		parsed, err := url.Parse(u)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ch <- &Request{parsed, "GET"}
+		f.Enqueue(parsed, "GET")
+	}
+	f.Stop()
+	if len(f.hosts) != 2 {
+		t.Errorf("expected to have 2 hosts in the map, got %d", len(f.hosts))
 	}
 }
