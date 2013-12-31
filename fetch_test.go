@@ -2,12 +2,13 @@ package fetch
 
 import (
 	"net/url"
+	"os"
 	"testing"
 )
 
 func TestFetcher(t *testing.T) {
 	urls := []string{"http://0value.com", "https://google.com"}
-	f := New(nil, -1)
+	f := New(LogHandler(os.Stdout), -1)
 	f.Start()
 	for _, u := range urls {
 		parsed, err := url.Parse(u)
