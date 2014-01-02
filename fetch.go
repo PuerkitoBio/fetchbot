@@ -16,6 +16,7 @@ import (
 var (
 	ErrEmptyHost  = errors.New("fetch: invalid empty host")
 	ErrDisallowed = errors.New("fetch: disallowed by robots.txt")
+	ErrUnstarted  = errors.New("fetch: enqueue on an unstarted Fetcher")
 )
 
 const (
@@ -44,6 +45,8 @@ type Fetcher struct {
 	// before it is stopped and cleared from memory.
 	WorkerIdleTTL time.Duration
 
+	// started indicates if the Fetcher has been started.
+	started bool
 	// ch is the channel to enqueue requests for this fetcher.
 	ch chan Command
 	// buf is the buffer capacity of the channel
@@ -85,48 +88,45 @@ func New(h Handler, buf int) *Fetcher {
 }
 
 // Enqueue is a convenience method to send a request to the Fetcher's channel.
-// It is the same as `ch <- &fetch.Cmd{U: u, M: method}` where `ch` is the Fetcher's channel
-// returned by the call to Fetcher.Start.
-func (f *Fetcher) Enqueue(u *url.URL, method string) {
-	f.ch <- &Cmd{U: u, M: method}
-}
-
 func (f *Fetcher) EnqueueString(rawurl, method string) error {
-	parsed, err := url.Parse(rawurl)
-	if err != nil {
-		return err
-	}
-	f.ch <- &Cmd{U: parsed, M: method}
-	return nil
+	_, err := f.enqueueWithMethod([]string{rawurl}, method)
+	return err
 }
 
-func (f *Fetcher) EnqueueHead(rawurl ...string) error {
+func (f *Fetcher) EnqueueHead(rawurl ...string) (int, error) {
 	return f.enqueueWithMethod(rawurl, "HEAD")
 }
 
-func (f *Fetcher) EnqueueGet(rawurl ...string) error {
+func (f *Fetcher) EnqueueGet(rawurl ...string) (int, error) {
 	return f.enqueueWithMethod(rawurl, "GET")
 }
 
-func (f *Fetcher) enqueueWithMethod(rawurl []string, method string) error {
-	for _, v := range rawurl {
-		err := f.EnqueueString(v, method)
-		if err != nil {
-			return err
-		}
+func (f *Fetcher) enqueueWithMethod(rawurl []string, method string) (int, error) {
+	if !f.started {
+		return 0, ErrUnstarted
 	}
-	return nil
+	for i, v := range rawurl {
+		parsed, err := url.Parse(v)
+		if err != nil {
+			return i, err
+		}
+		f.ch <- &Cmd{U: parsed, M: method}
+	}
+	return len(rawurl), nil
 }
 
 func (f *Fetcher) Start() chan<- Command {
 	f.wg.Add(1)
 	go f.processQueue()
+	f.started = true
 	return f.ch
 }
 
 func (f *Fetcher) Stop() {
+	// TODO : Cleanup so start can be called again on the same Fetcher
 	close(f.ch)
 	f.wg.Wait()
+	f.started = false
 }
 
 func (f *Fetcher) processQueue() {
