@@ -16,7 +16,6 @@ import (
 var (
 	ErrEmptyHost  = errors.New("fetch: invalid empty host")
 	ErrDisallowed = errors.New("fetch: disallowed by robots.txt")
-	ErrUnstarted  = errors.New("fetch: enqueue on an unstarted Fetcher")
 )
 
 const (
@@ -87,39 +86,38 @@ func New(h Handler, buf int) *Fetcher {
 	}
 }
 
+type Queue chan<- Command
+
 // Enqueue is a convenience method to send a request to the Fetcher's channel.
-func (f *Fetcher) EnqueueString(rawurl, method string) error {
-	_, err := f.enqueueWithMethod([]string{rawurl}, method)
+func (q Queue) Enqueue(rawurl, method string) error {
+	_, err := q.enqueueWithMethod([]string{rawurl}, method)
 	return err
 }
 
-func (f *Fetcher) EnqueueHead(rawurl ...string) (int, error) {
-	return f.enqueueWithMethod(rawurl, "HEAD")
+func (q Queue) EnqueueHead(rawurl ...string) (int, error) {
+	return q.enqueueWithMethod(rawurl, "HEAD")
 }
 
-func (f *Fetcher) EnqueueGet(rawurl ...string) (int, error) {
-	return f.enqueueWithMethod(rawurl, "GET")
+func (q Queue) EnqueueGet(rawurl ...string) (int, error) {
+	return q.enqueueWithMethod(rawurl, "GET")
 }
 
-func (f *Fetcher) enqueueWithMethod(rawurl []string, method string) (int, error) {
-	if !f.started {
-		return 0, ErrUnstarted
-	}
+func (q Queue) enqueueWithMethod(rawurl []string, method string) (int, error) {
 	for i, v := range rawurl {
 		parsed, err := url.Parse(v)
 		if err != nil {
 			return i, err
 		}
-		f.ch <- &Cmd{U: parsed, M: method}
+		q <- &Cmd{U: parsed, M: method}
 	}
 	return len(rawurl), nil
 }
 
-func (f *Fetcher) Start() chan<- Command {
+func (f *Fetcher) Start() Queue {
 	f.wg.Add(1)
 	go f.processQueue()
 	f.started = true
-	return f.ch
+	return Queue(f.ch)
 }
 
 func (f *Fetcher) Stop() {
@@ -134,7 +132,7 @@ func (f *Fetcher) processQueue() {
 		u := v.URL()
 		if u.Host == "" {
 			// The URL must be rooted with a host.
-			f.Handler.Handle(v, nil, nil, ErrEmptyHost)
+			f.Handler.Handle(nil, &Context{Cmd: v, Chan: f.ch}, ErrEmptyHost)
 			continue
 		}
 		// Check if a channel is already started for this host
@@ -146,7 +144,7 @@ func (f *Fetcher) processQueue() {
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
 			if err != nil {
-				f.Handler.Handle(v, nil, nil, err)
+				f.Handler.Handle(nil, &Context{Cmd: v, Chan: f.ch}, err)
 				continue
 			}
 			// Create the channel and add it to the hosts map
@@ -265,7 +263,7 @@ func (f *Fetcher) visit(cmd Command, res *http.Response, req *http.Request, err 
 	if res != nil {
 		defer res.Body.Close()
 	}
-	f.Handler.Handle(cmd, res, req, err)
+	f.Handler.Handle(res, &Context{Cmd: cmd, Request: req, Chan: f.ch}, err)
 }
 
 func (f *Fetcher) doRequest(r Command) (*http.Response, *http.Request, error) {

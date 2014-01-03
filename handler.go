@@ -2,12 +2,18 @@ package fetch
 
 import "net/http"
 
-type Handler interface {
-	Handle(cmd Command, res *http.Response, req *http.Request, err error)
+type Context struct {
+	Cmd     Command
+	Request *http.Request
+	Chan    Queue
 }
 
-type HandlerFunc func(Command, *http.Response, *http.Request, error)
+type Handler interface {
+	Handle(*http.Response, *Context, error)
+}
 
-func (h HandlerFunc) Handle(cmd Command, res *http.Response, req *http.Request, err error) {
-	h(cmd, res, req, err)
+type HandlerFunc func(*http.Response, *Context, error)
+
+func (h HandlerFunc) Handle(res *http.Response, ctx *Context, err error) {
+	h(res, ctx, err)
 }

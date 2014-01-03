@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 )
 
 type spyHandler struct {
@@ -14,10 +15,10 @@ type spyHandler struct {
 	errs []error
 }
 
-func (sh *spyHandler) Handle(cmd Command, res *http.Response, req *http.Request, err error) {
+func (sh *spyHandler) Handle(res *http.Response, ctx *Context, err error) {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	sh.cmds = append(sh.cmds, cmd)
+	sh.cmds = append(sh.cmds, ctx.Cmd)
 	sh.errs = append(sh.errs, err)
 }
 
@@ -31,6 +32,17 @@ func (sh *spyHandler) Errors() int {
 		}
 	}
 	return cnt
+}
+
+func (sh *spyHandler) CommandFor(rawurl string) Command {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	for _, c := range sh.cmds {
+		if c.URL().String() == rawurl {
+			return c
+		}
+	}
+	return nil
 }
 
 func (sh *spyHandler) ErrorFor(rawurl string) error {
@@ -70,7 +82,7 @@ func (sh *spyHandler) CalledWithExactly(rawurl ...string) bool {
 	return true
 }
 
-var nopHandler Handler = HandlerFunc(func(cmd Command, res *http.Response, req *http.Request, err error) {})
+var nopHandler Handler = HandlerFunc(func(res *http.Response, ctx *Context, err error) {})
 
 // Test that an initialized Fetcher has the right defaults.
 func TestNew(t *testing.T) {
@@ -92,22 +104,6 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestEnqueueUnstarted(t *testing.T) {
-	f := New(nopHandler, -1)
-	_, err := f.EnqueueGet("http://localhost")
-	if err != ErrUnstarted {
-		t.Errorf("EnqueueGet: expected error %s, got %v", ErrUnstarted, err)
-	}
-	_, err = f.EnqueueHead("http://localhost")
-	if err != ErrUnstarted {
-		t.Errorf("EnqueueHead: expected error %s, got %v", ErrUnstarted, err)
-	}
-	err = f.EnqueueString("http://localhost", "PUT")
-	if err != ErrUnstarted {
-		t.Errorf("EnqueueString: expected error %s, got %v", ErrUnstarted, err)
-	}
-}
-
 func TestEnqueueVariadic(t *testing.T) {
 	// Start a test server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,8 +119,8 @@ func TestEnqueueVariadic(t *testing.T) {
 	sh := &spyHandler{}
 	f := New(sh, 0)
 	f.CrawlDelay = 0
-	f.Start()
-	n, err := f.EnqueueGet(cases...)
+	q := f.Start()
+	n, err := q.EnqueueGet(cases...)
 	if n != len(handled) {
 		t.Errorf("expected %d URLs enqueued, got %d", len(handled), n)
 	}
@@ -161,9 +157,9 @@ func TestEnqueueString(t *testing.T) {
 	sh := &spyHandler{}
 	f := New(sh, 0)
 	f.CrawlDelay = 0
-	f.Start()
+	q := f.Start()
 	for _, c := range cases {
-		err := f.EnqueueString(c, "GET")
+		err := q.Enqueue(c, "GET")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -179,4 +175,245 @@ func TestEnqueueString(t *testing.T) {
 	}
 }
 
-// TODO : ErrDisallowed, Idle hosts, prove deadlock error possibility before fixing it
+func TestFetchDisallowed(t *testing.T) {
+	// Start 2 test servers
+	srvDisAll := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.Write([]byte(`
+User-agent: *
+Disallow: /
+`))
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srvDisAll.Close()
+	srvAllSome := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.Write([]byte(`
+User-agent: Googlebot
+Disallow: /
+
+User-agent: Fetchbot
+Disallow: /a
+`))
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srvAllSome.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srvDisAll.URL + "/a", srvDisAll.URL + "/b", srvAllSome.URL + "/a", srvAllSome.URL + "/b"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh, 0)
+	f.CrawlDelay = 0
+	q := f.Start()
+	for _, c := range cases {
+		err := q.Enqueue(c, "GET")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Stop to wait for all commands to be processed
+	f.Stop()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	if cnt := sh.Errors(); cnt != 3 {
+		t.Errorf("expected 3 errors, got %d", cnt)
+	}
+	for i := 0; i < 3; i++ {
+		if err := sh.ErrorFor(cases[i]); err != ErrDisallowed {
+			t.Errorf("expected error %s for %s, got %v", ErrDisallowed, cases[i], err)
+		}
+	}
+}
+
+func TestCrawlDelay(t *testing.T) {
+	// Start a test server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.Write([]byte(`
+User-agent: Fetchbot
+Crawl-delay: 1
+`))
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv.URL + "/a", srv.URL + "/b"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh, -1)
+	f.CrawlDelay = 0
+	start := time.Now()
+	q := f.Start()
+	_, err := q.EnqueueGet(cases...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stop to wait for all commands to be processed
+	f.Stop()
+	delay := time.Now().Sub(start)
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+	if delay < 2*time.Second || delay > (2*time.Second+10*time.Millisecond) {
+		t.Errorf("expected delay to be around 2s, got %s", delay)
+	}
+}
+
+func TestManyCrawlDelays(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	// Start two test servers
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.Write([]byte(`
+User-agent: Fetchbot
+Crawl-delay: 1
+`))
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srv1.Close()
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv2.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv1.URL + "/a", srv1.URL + "/b", srv2.URL + "/a", srv2.URL + "/b"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh, -1)
+	f.CrawlDelay = 2 * time.Second
+	start := time.Now()
+	q := f.Start()
+	_, err := q.EnqueueGet(cases...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stop to wait for all commands to be processed
+	f.Stop()
+	delay := time.Now().Sub(start)
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+	if delay < 4*time.Second || delay > (4*time.Second+10*time.Millisecond) {
+		t.Errorf("expected delay to be around 4s, got %s", delay)
+	}
+}
+
+type IDCmd struct {
+	*Cmd
+	ID int
+}
+
+func TestCustomCommand(t *testing.T) {
+	// Start a test server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv.URL + "/a", srv.URL + "/b"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh, -1)
+	f.CrawlDelay = 0
+	q := f.Start()
+	for i, c := range cases {
+		parsed, err := url.Parse(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q <- &IDCmd{&Cmd{U: parsed, M: "GET"}, i}
+	}
+	// Stop to wait for all commands to be processed
+	f.Stop()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+	for i, c := range cases {
+		cmd := sh.CommandFor(c)
+		if idc, ok := cmd.(*IDCmd); !ok {
+			t.Errorf("expected command for %s to be an *IDCmd, got %T", c, cmd)
+		} else if idc.ID != i {
+			t.Errorf("expected command ID for %s to be %d, got %d", c, i, idc.ID)
+		}
+	}
+}
+
+func TestFreeIdleHost(t *testing.T) {
+	// Start 2 test servers
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv1.Close()
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv2.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv1.URL + "/a", srv2.URL + "/a"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh, -1)
+	f.CrawlDelay = 0
+	f.WorkerIdleTTL = 100 * time.Millisecond
+	q := f.Start()
+	for _, c := range cases {
+		_, err := q.EnqueueGet(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(101 * time.Millisecond)
+	}
+	// Stop by closing the Queue so that the fetcher isn't reset
+	close(q)
+	f.wg.Wait()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+	// Check that the srv1 host is removed
+	if _, ok := f.hosts[srv1.URL[len("http://"):]]; ok {
+		t.Error("expected host of srv1 to be removed, was still there")
+	}
+	if _, ok := f.hosts[srv2.URL[len("http://"):]]; !ok {
+		t.Error("expected host of srv2 to be present, was absent")
+	}
+}
+
+// TODO : start-stop-restart, prove deadlock error possibility before fixing it
