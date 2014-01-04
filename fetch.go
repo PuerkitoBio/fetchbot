@@ -1,4 +1,4 @@
-package fetch
+package fetchbot
 
 import (
 	"container/list"
@@ -21,7 +21,7 @@ var (
 const (
 	DefaultCrawlDelay     = 5 * time.Second
 	DefaultChanBufferSize = 10
-	DefaultUserAgent      = "fetchbot (https://github.com/PuerkitoBio/fetch)"
+	DefaultUserAgent      = "Fetchbot (https://github.com/PuerkitoBio/fetchbot)"
 	DefaultWorkerIdleTTL  = 30 * time.Second
 )
 
@@ -44,8 +44,6 @@ type Fetcher struct {
 	// before it is stopped and cleared from memory.
 	WorkerIdleTTL time.Duration
 
-	// started indicates if the Fetcher has been started.
-	started bool
 	// ch is the channel to enqueue requests for this fetcher.
 	ch chan Command
 	// buf is the buffer capacity of the channel
@@ -78,7 +76,6 @@ func New(h Handler, buf int) *Fetcher {
 		HttpClient:     http.DefaultClient,
 		UserAgent:      DefaultUserAgent,
 		WorkerIdleTTL:  DefaultWorkerIdleTTL,
-		ch:             make(chan Command, buf),
 		buf:            buf,
 		hosts:          make(map[string]chan Command),
 		hostToIdleElem: make(map[string]*list.Element),
@@ -114,17 +111,21 @@ func (q Queue) enqueueWithMethod(rawurl []string, method string) (int, error) {
 }
 
 func (f *Fetcher) Start() Queue {
+	f.ch = make(chan Command, f.buf)
 	f.wg.Add(1)
 	go f.processQueue()
-	f.started = true
-	return Queue(f.ch)
+	return f.ch
 }
 
 func (f *Fetcher) Stop() {
-	// TODO : Cleanup so start can be called again on the same Fetcher
+	// Close the Queue channel.
 	close(f.ch)
+	// Wait for goroutines to drain and terminate.
 	f.wg.Wait()
-	f.started = false
+	// Reset internal maps and lists so that the fetcher is ready to reuse
+	f.hosts = make(map[string]chan Command)
+	f.hostToIdleElem = make(map[string]*list.Element)
+	f.idleList = list.New()
 }
 
 func (f *Fetcher) processQueue() {
@@ -132,7 +133,7 @@ func (f *Fetcher) processQueue() {
 		u := v.URL()
 		if u.Host == "" {
 			// The URL must be rooted with a host.
-			f.Handler.Handle(nil, &Context{Cmd: v, Chan: f.ch}, ErrEmptyHost)
+			f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, ErrEmptyHost)
 			continue
 		}
 		// Check if a channel is already started for this host
@@ -144,7 +145,7 @@ func (f *Fetcher) processQueue() {
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
 			if err != nil {
-				f.Handler.Handle(nil, &Context{Cmd: v, Chan: f.ch}, err)
+				f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, err)
 				continue
 			}
 			// Create the channel and add it to the hosts map
@@ -231,7 +232,7 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 		case agent == nil || agent.Test(v.URL().Path):
 			// Path allowed, process the request
 			res, req, err := f.doRequest(v)
-			f.visit(v, res, req, err)
+			f.visit(v, req, res, err)
 			wait = time.After(delay)
 		default:
 			// Path disallowed by robots.txt
@@ -259,11 +260,11 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 	return robData.FindGroup(f.UserAgent)
 }
 
-func (f *Fetcher) visit(cmd Command, res *http.Response, req *http.Request, err error) {
+func (f *Fetcher) visit(cmd Command, req *http.Request, res *http.Response, err error) {
 	if res != nil {
 		defer res.Body.Close()
 	}
-	f.Handler.Handle(res, &Context{Cmd: cmd, Request: req, Chan: f.ch}, err)
+	f.Handler.Handle(&Context{Cmd: cmd, Request: req, Chan: f.ch}, res, err)
 }
 
 func (f *Fetcher) doRequest(r Command) (*http.Response, *http.Request, error) {
@@ -271,11 +272,10 @@ func (f *Fetcher) doRequest(r Command) (*http.Response, *http.Request, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	ua := r.UserAgent()
-	if ua == "" {
-		ua = f.UserAgent
+	// TODO : Take other interfaces into account...
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", f.UserAgent)
 	}
-	req.Header.Set("User-Agent", ua)
 	res, err := f.HttpClient.Do(req)
 	if err != nil {
 		return nil, req, err

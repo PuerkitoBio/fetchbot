@@ -1,4 +1,4 @@
-package fetch
+package fetchbot
 
 import (
 	"net/http"
@@ -13,13 +13,17 @@ type spyHandler struct {
 	mu   sync.Mutex
 	cmds []Command
 	errs []error
+	fn   Handler
 }
 
-func (sh *spyHandler) Handle(res *http.Response, ctx *Context, err error) {
+func (sh *spyHandler) Handle(ctx *Context, res *http.Response, err error) {
 	sh.mu.Lock()
-	defer sh.mu.Unlock()
 	sh.cmds = append(sh.cmds, ctx.Cmd)
 	sh.errs = append(sh.errs, err)
+	sh.mu.Unlock()
+	if sh.fn != nil {
+		sh.fn.Handle(ctx, res, err)
+	}
 }
 
 func (sh *spyHandler) Errors() int {
@@ -82,7 +86,7 @@ func (sh *spyHandler) CalledWithExactly(rawurl ...string) bool {
 	return true
 }
 
-var nopHandler Handler = HandlerFunc(func(res *http.Response, ctx *Context, err error) {})
+var nopHandler Handler = HandlerFunc(func(ctx *Context, res *http.Response, err error) {})
 
 // Test that an initialized Fetcher has the right defaults.
 func TestNew(t *testing.T) {
@@ -416,4 +420,59 @@ func TestFreeIdleHost(t *testing.T) {
 	}
 }
 
-// TODO : start-stop-restart, prove deadlock error possibility before fixing it
+func TestRestart(t *testing.T) {
+	f := New(nil, -1)
+	f.CrawlDelay = 0
+	for i := 0; i < 2; i++ {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("ok"))
+		}))
+		cases := []string{srv.URL + "/a", srv.URL + "/b"}
+		sh := &spyHandler{}
+		f.Handler = sh
+		q := f.Start()
+		q.EnqueueGet(cases...)
+		f.Stop()
+		// Assert that the handler got called with the right values
+		if ok := sh.CalledWithExactly(cases...); !ok {
+			t.Error("expected handler to be called with all cases")
+		}
+		// Assert that there was no error
+		if cnt := sh.Errors(); cnt > 0 {
+			t.Errorf("expected no errors, got %d", cnt)
+		}
+		// Assert that clean-up is done
+		if len(f.hosts) != 0 || len(f.hostToIdleElem) != 0 || f.idleList.Len() != 0 {
+			t.Errorf("run %d: expected clean-up to be done, found hosts=%d, hostToIdleElem=%d, idleList=%d", i, len(f.hosts), len(f.hostToIdleElem), f.idleList.Len())
+		}
+		srv.Close()
+	}
+}
+
+func TestOverflowBuffer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	cases := []string{srv.URL + "/a", srv.URL + "/b", srv.URL + "/c", srv.URL + "/d", srv.URL + "/e", srv.URL + "/f"}
+	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
+		if ctx.Cmd.URL().Path == "/a" {
+			// Enqueue a bunch, while this host's goroutine is busy waiting for this call
+			ctx.Chan.EnqueueGet(cases[1:]...)
+		}
+	})}
+	f := New(sh, 1) // Buffer of only one
+	f.CrawlDelay = 0
+	q := f.Start()
+	q.EnqueueGet(cases[0])
+	time.Sleep(100 * time.Millisecond)
+	f.Stop()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	// Assert that there was no error
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+}

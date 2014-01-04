@@ -1,4 +1,4 @@
-package fetch
+package fetchbot
 
 import "net/http"
 
@@ -9,11 +9,11 @@ type Context struct {
 }
 
 type Handler interface {
-	Handle(*http.Response, *Context, error)
+	Handle(*Context, *http.Response, error)
 }
 
-type HandlerFunc func(*http.Response, *Context, error)
+type HandlerFunc func(*Context, *http.Response, error)
 
-func (h HandlerFunc) Handle(res *http.Response, ctx *Context, err error) {
-	h(res, ctx, err)
+func (h HandlerFunc) Handle(ctx *Context, res *http.Response, err error) {
+	h(ctx, res, err)
 }
