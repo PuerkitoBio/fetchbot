@@ -90,7 +90,7 @@ var nopHandler Handler = HandlerFunc(func(ctx *Context, res *http.Response, err 
 
 // Test that an initialized Fetcher has the right defaults.
 func TestNew(t *testing.T) {
-	f := New(nopHandler, -1)
+	f := New(nopHandler)
 	if f.CrawlDelay != DefaultCrawlDelay {
 		t.Errorf("expected CrawlDelay to be %s, got %s", DefaultCrawlDelay, f.CrawlDelay)
 	}
@@ -102,9 +102,6 @@ func TestNew(t *testing.T) {
 	}
 	if f.WorkerIdleTTL != DefaultWorkerIdleTTL {
 		t.Errorf("expected WorkerIdleTTL to be %s, got %s", DefaultWorkerIdleTTL, f.WorkerIdleTTL)
-	}
-	if f.buf != DefaultChanBufferSize {
-		t.Errorf("expected chan buffer size to be %d, got %d", DefaultChanBufferSize, f.buf)
 	}
 }
 
@@ -121,7 +118,7 @@ func TestEnqueueVariadic(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, 0)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	n, err := q.EnqueueGet(cases...)
@@ -159,7 +156,7 @@ func TestEnqueueString(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, 0)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
@@ -212,7 +209,7 @@ Disallow: /a
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, 0)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
@@ -256,7 +253,7 @@ Crawl-delay: 1
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, -1)
+	f := New(sh)
 	f.CrawlDelay = 0
 	start := time.Now()
 	q := f.Start()
@@ -305,7 +302,7 @@ Crawl-delay: 1
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, -1)
+	f := New(sh)
 	f.CrawlDelay = 2 * time.Second
 	start := time.Now()
 	q := f.Start()
@@ -345,7 +342,7 @@ func TestCustomCommand(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, -1)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for i, c := range cases {
@@ -390,7 +387,7 @@ func TestFreeIdleHost(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, -1)
+	f := New(sh)
 	f.CrawlDelay = 0
 	f.WorkerIdleTTL = 100 * time.Millisecond
 	q := f.Start()
@@ -421,7 +418,7 @@ func TestFreeIdleHost(t *testing.T) {
 }
 
 func TestRestart(t *testing.T) {
-	f := New(nil, -1)
+	f := New(nil)
 	f.CrawlDelay = 0
 	for i := 0; i < 2; i++ {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -461,7 +458,7 @@ func TestOverflowBuffer(t *testing.T) {
 			ctx.Chan.EnqueueGet(cases[1:]...)
 		}
 	})}
-	f := New(sh, 1) // Buffer of only one
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	q.EnqueueGet(cases[0])

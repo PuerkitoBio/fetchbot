@@ -19,10 +19,9 @@ var (
 )
 
 const (
-	DefaultCrawlDelay     = 5 * time.Second
-	DefaultChanBufferSize = 10
-	DefaultUserAgent      = "Fetchbot (https://github.com/PuerkitoBio/fetchbot)"
-	DefaultWorkerIdleTTL  = 30 * time.Second
+	DefaultCrawlDelay    = 5 * time.Second
+	DefaultUserAgent     = "Fetchbot (https://github.com/PuerkitoBio/fetchbot)"
+	DefaultWorkerIdleTTL = 30 * time.Second
 )
 
 type Fetcher struct {
@@ -46,8 +45,6 @@ type Fetcher struct {
 
 	// ch is the channel to enqueue requests for this fetcher.
 	ch chan Command
-	// buf is the buffer capacity of the channel
-	buf int
 	// wg waits for the processQueue func and worker goroutines to finish.
 	wg sync.WaitGroup
 
@@ -66,17 +63,13 @@ type hostTimestamp struct {
 	ts   time.Time
 }
 
-func New(h Handler, buf int) *Fetcher {
-	if buf < 0 {
-		buf = DefaultChanBufferSize
-	}
+func New(h Handler) *Fetcher {
 	return &Fetcher{
 		Handler:        h,
 		CrawlDelay:     DefaultCrawlDelay,
 		HttpClient:     http.DefaultClient,
 		UserAgent:      DefaultUserAgent,
 		WorkerIdleTTL:  DefaultWorkerIdleTTL,
-		buf:            buf,
 		hosts:          make(map[string]chan Command),
 		hostToIdleElem: make(map[string]*list.Element),
 		idleList:       list.New(),
@@ -111,7 +104,7 @@ func (q Queue) enqueueWithMethod(rawurl []string, method string) (int, error) {
 }
 
 func (f *Fetcher) Start() Queue {
-	f.ch = make(chan Command, f.buf)
+	f.ch = make(chan Command, 1)
 	f.wg.Add(1)
 	go f.processQueue()
 	return f.ch
@@ -132,12 +125,13 @@ func (f *Fetcher) processQueue() {
 	for v := range f.ch {
 		u := v.URL()
 		if u.Host == "" {
-			// The URL must be rooted with a host.
-			f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, ErrEmptyHost)
+			// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
+			// goroutine must not block.
+			go f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, ErrEmptyHost)
 			continue
 		}
 		// Check if a channel is already started for this host
-		ch, ok := f.hosts[u.Host]
+		in, ok := f.hosts[u.Host]
 		if !ok {
 			// Start a new channel and goroutine for this host. The chan has the same
 			// buffer as the enqueue channel of the Fetcher.
@@ -145,31 +139,34 @@ func (f *Fetcher) processQueue() {
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
 			if err != nil {
-				f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, err)
+				// Handle on a separate goroutine, the Queue goroutine must not block.
+				go f.Handler.Handle(&Context{Cmd: v, Chan: f.ch}, nil, err)
 				continue
 			}
-			// Create the channel and add it to the hosts map
-			ch = make(chan Command, f.buf)
-			f.hosts[u.Host] = ch
+			// Create the infinite queue: the in channel to send on, and the out channel
+			// to read from in the host's goroutine, and add to the hosts map
+			var out chan Command
+			in, out = make(chan Command, 1), make(chan Command, 1)
+			f.hosts[u.Host] = in
 			f.wg.Add(1)
+			// Start the infinite queue goroutine for this host
+			go SliceIQ(in, out)
 			// Start the working goroutine for this host
-			go f.processChan(ch)
+			go f.processChan(out)
 			// Enqueue the robots.txt request first.
-			ch <- robotCommand{&Cmd{U: rob, M: "GET"}}
+			in <- robotCommand{&Cmd{U: rob, M: "GET"}}
 		}
-		// Send the request to this channel
-		// TODO : Right now, this could deadlock if a handler tries to enqueue and the
-		// host goro is full (which is highly possible, given the delays). Host goro waits
-		// for handler to finish before dequeuing next one, and handler waits for enqueue
-		// to free a spot -> deadlock. Should internally buffer using a list?
-		ch <- v
+		// Send the request
+		in <- v
 		// Adjust the timestamp for this host's idle TTL
 		f.setHostTimestamp(u.Host)
 		// Garbage collect idle hosts
-		// TODO : Do only once in a while, not on every loop?
 		f.freeIdleHosts()
 	}
-	// Close all host channels now that it is impossible to send on those.
+	// Close all host channels now that it is impossible to send on those. Those are the `in`
+	// channels of the infinite queue. It will the drain any pending events, triggering the
+	// handlers for each in the worker goro, and then the infinite queue goro will terminate
+	// and close the `out` channel, which in turn will terminate the worker goro.
 	for _, ch := range f.hosts {
 		close(ch)
 	}
