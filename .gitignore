@@ -4,5 +4,5 @@
 *.swo
 #*.*#
 tags
-fetch.test
-
+fetchbot.test
+example/example

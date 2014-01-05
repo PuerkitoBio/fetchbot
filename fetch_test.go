@@ -105,7 +105,65 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestEnqueueVariadic(t *testing.T) {
+func TestQueueClosed(t *testing.T) {
+	f := New(nil)
+	q := f.Start()
+	q.Close()
+	_, err := q.SendStringGet("a")
+	if err != ErrQueueClosed {
+		t.Errorf("expected error %s, got %v", ErrQueueClosed, err)
+	}
+	// Test that closing a closed Queue doesn't panic
+	q.Close()
+}
+
+func TestBlock(t *testing.T) {
+	// Start a test server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv.URL + "/a", srv.URL + "/b"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh)
+	f.CrawlDelay = 0
+	q := f.Start()
+	_, err := q.SendStringGet(cases...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	ok := false
+	go func() {
+		q.Block()
+		mu.Lock()
+		ok = true
+		mu.Unlock()
+	}()
+	time.Sleep(100 * time.Millisecond)
+	q.Close()
+	time.Sleep(100 * time.Millisecond)
+	// Assert that the handler got called with all cases
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	// Expect 0 error
+	if cnt := sh.Errors(); cnt != 0 {
+		t.Errorf("expected no error, got %d", cnt)
+	}
+	// Expect ok to be true
+	mu.Lock()
+	if !ok {
+		t.Error("expected flag to be set to true after Block release, got false")
+	}
+	mu.Unlock()
+}
+
+func TestSendVariadic(t *testing.T) {
 	// Start a test server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
@@ -121,7 +179,7 @@ func TestEnqueueVariadic(t *testing.T) {
 	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
-	n, err := q.EnqueueGet(cases...)
+	n, err := q.SendStringGet(cases...)
 	if n != len(handled) {
 		t.Errorf("expected %d URLs enqueued, got %d", len(handled), n)
 	}
@@ -129,7 +187,7 @@ func TestEnqueueVariadic(t *testing.T) {
 		t.Errorf("expected parse error, got %v", err)
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(handled...); !ok {
 		t.Error("expected handler to be called with valid cases")
@@ -144,7 +202,41 @@ func TestEnqueueVariadic(t *testing.T) {
 	}
 }
 
-func TestEnqueueString(t *testing.T) {
+func TestUserAgent(t *testing.T) {
+	// Start a test server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv.URL + "/a"}
+
+	// Start the Fetcher
+	f := New(nil)
+	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
+		if f.UserAgent != res.Request.UserAgent() {
+			t.Errorf("expected user agent %s, got %s", f.UserAgent, res.Request.UserAgent())
+		}
+	})}
+	f.Handler = sh
+	f.CrawlDelay = 0
+	f.UserAgent = "test"
+	q := f.Start()
+	q.SendStringGet(cases...)
+	// Stop to wait for all commands to be processed
+	q.Close()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	// Assert that there was no error
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+}
+
+func TestSendString(t *testing.T) {
 	// Start a test server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
@@ -160,17 +252,18 @@ func TestEnqueueString(t *testing.T) {
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
-		err := q.Enqueue(c, "GET")
+		_, err := q.SendString("GET", c)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
@@ -213,17 +306,18 @@ Disallow: /a
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
-		err := q.Enqueue(c, "GET")
+		_, err := q.SendString("GET", c)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was the correct number of expected errors
 	if cnt := sh.Errors(); cnt != 3 {
 		t.Errorf("expected 3 errors, got %d", cnt)
 	}
@@ -257,26 +351,29 @@ Crawl-delay: 1
 	f.CrawlDelay = 0
 	start := time.Now()
 	q := f.Start()
-	_, err := q.EnqueueGet(cases...)
+	_, err := q.SendStringGet(cases...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	delay := time.Now().Sub(start)
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
+	// Assert that the total elapsed time is around 2 seconds
 	if delay < 2*time.Second || delay > (2*time.Second+10*time.Millisecond) {
 		t.Errorf("expected delay to be around 2s, got %s", delay)
 	}
 }
 
 func TestManyCrawlDelays(t *testing.T) {
+	// Skip if -short flag is set
 	if testing.Short() {
 		t.SkipNow()
 	}
@@ -306,25 +403,28 @@ Crawl-delay: 1
 	f.CrawlDelay = 2 * time.Second
 	start := time.Now()
 	q := f.Start()
-	_, err := q.EnqueueGet(cases...)
+	_, err := q.SendStringGet(cases...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	delay := time.Now().Sub(start)
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
+	// Assert that the total elapsed time is around 4 seconds
 	if delay < 4*time.Second || delay > (4*time.Second+10*time.Millisecond) {
 		t.Errorf("expected delay to be around 4s, got %s", delay)
 	}
 }
 
+// Custom Command for TestCustomCommand
 type IDCmd struct {
 	*Cmd
 	ID int
@@ -350,17 +450,19 @@ func TestCustomCommand(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		q <- &IDCmd{&Cmd{U: parsed, M: "GET"}, i}
+		q.Send(&IDCmd{&Cmd{U: parsed, M: "GET"}, i})
 	}
 	// Stop to wait for all commands to be processed
-	f.Stop()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
+	// Assert that all commands got passed with the correct custom information
 	for i, c := range cases {
 		cmd := sh.CommandFor(c)
 		if idc, ok := cmd.(*IDCmd); !ok {
@@ -392,19 +494,18 @@ func TestFreeIdleHost(t *testing.T) {
 	f.WorkerIdleTTL = 100 * time.Millisecond
 	q := f.Start()
 	for _, c := range cases {
-		_, err := q.EnqueueGet(c)
+		_, err := q.SendStringGet(c)
 		if err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(101 * time.Millisecond)
 	}
-	// Stop by closing the Queue so that the fetcher isn't reset
-	close(q)
-	f.wg.Wait()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
 	}
+	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
@@ -412,6 +513,7 @@ func TestFreeIdleHost(t *testing.T) {
 	if _, ok := f.hosts[srv1.URL[len("http://"):]]; ok {
 		t.Error("expected host of srv1 to be removed, was still there")
 	}
+	// Check that the srv2 is still present
 	if _, ok := f.hosts[srv2.URL[len("http://"):]]; !ok {
 		t.Error("expected host of srv2 to be present, was absent")
 	}
@@ -428,8 +530,15 @@ func TestRestart(t *testing.T) {
 		sh := &spyHandler{}
 		f.Handler = sh
 		q := f.Start()
-		q.EnqueueGet(cases...)
-		f.Stop()
+		// Assert that the lists and maps are empty
+		if len(f.hosts) != 0 || len(f.hostToIdleElem) != 0 || f.idleList.Len() != 0 {
+			t.Errorf("run %d: expected clean slate after call to Start, found hosts=%d, hostToIdleElem=%d, idleList=%d", i, len(f.hosts), len(f.hostToIdleElem), f.idleList.Len())
+		}
+		_, err := q.SendStringGet(cases...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
 		// Assert that the handler got called with the right values
 		if ok := sh.CalledWithExactly(cases...); !ok {
 			t.Error("expected handler to be called with all cases")
@@ -437,10 +546,6 @@ func TestRestart(t *testing.T) {
 		// Assert that there was no error
 		if cnt := sh.Errors(); cnt > 0 {
 			t.Errorf("expected no errors, got %d", cnt)
-		}
-		// Assert that clean-up is done
-		if len(f.hosts) != 0 || len(f.hostToIdleElem) != 0 || f.idleList.Len() != 0 {
-			t.Errorf("run %d: expected clean-up to be done, found hosts=%d, hostToIdleElem=%d, idleList=%d", i, len(f.hosts), len(f.hostToIdleElem), f.idleList.Len())
 		}
 		srv.Close()
 	}
@@ -455,15 +560,21 @@ func TestOverflowBuffer(t *testing.T) {
 	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
 		if ctx.Cmd.URL().Path == "/a" {
 			// Enqueue a bunch, while this host's goroutine is busy waiting for this call
-			ctx.Chan.EnqueueGet(cases[1:]...)
+			_, err := ctx.Q.SendStringGet(cases[1:]...)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 	})}
 	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
-	q.EnqueueGet(cases[0])
+	_, err := q.SendStringGet(cases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(100 * time.Millisecond)
-	f.Stop()
+	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")

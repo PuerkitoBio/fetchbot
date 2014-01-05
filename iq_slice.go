@@ -22,10 +22,10 @@ the License.
 
 package fetchbot
 
-// SliceIQ creates an infinite buffered channel taking input on
+// sliceIQ creates an infinite buffered channel taking input on
 // in and sending output to next.  SliceIQ should be run in its
 // own goroutine.
-func SliceIQ(in <-chan Command, next chan<- Command) {
+func sliceIQ(in <-chan Command, next chan<- Command) {
 	defer close(next)
 
 	// pending events (this is the "infinite" part)

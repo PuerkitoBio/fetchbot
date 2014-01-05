@@ -13,28 +13,39 @@ type Command interface {
 	Method() string
 }
 
-// TODO : Naming, and take into account those additional interfaces.
-type BasicAuth interface {
-	Credentials() (string, string)
+// The BasicAuthProvider interface gets the credentials to use to perform the request
+// with Basic Authentication.
+type BasicAuthProvider interface {
+	BasicAuth() (user string, pwd string)
 }
 
-type BodyReader interface {
-	Body() io.Reader
+// The ReaderProvider interface gets the Reader to use as the Body of the request. It has
+// higher priority than the ValuesProvider interface, so that if both interfaces are implemented,
+// the ReaderProvider is used.
+type ReaderProvider interface {
+	Reader() io.Reader
 }
 
-type BodyKeyValuer interface {
+// The ValuesProvider interface gets the values to send as the Body of the request. It has
+// lower priority than the ReaderProvider interface, so that if both interfaces are implemented,
+// the ReaderProvider is used. If the request has no explicit Content-Type set, it will be automatically
+// set to "application/x-www-form-urlencoded".
+type ValuesProvider interface {
 	Values() url.Values
 }
 
-type Cookier interface {
+// The CookiesProvider interface gets the cookies to send with the request.
+type CookiesProvider interface {
 	Cookies() []*http.Cookie
 }
 
-type Headerer interface {
+// The HeaderProvider interface gets the headers to set on the request. If an Authorization
+// header is set, it will be overridden by the BasicAuthProvider, if implemented.
+type HeaderProvider interface {
 	Header() http.Header
 }
 
-// The Cmd struct defines a basic command implementation.
+// The Cmd struct defines a basic Command implementation.
 type Cmd struct {
 	U *url.URL
 	M string

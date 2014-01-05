@@ -1,100 +1,178 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/fetchbot"
 	"github.com/PuerkitoBio/goquery"
 )
 
 var (
-	dup = make(map[string]bool)
-	mu  sync.Mutex
+	// Starting URL to crawl
+	seed = "http://golang.org"
+	// Duplicates table
+	dup = map[string]bool{seed: true}
+	// Protect access to dup
+	mu sync.Mutex
+
+	// Command-line flags
+	stopAfter = flag.Duration("stopafter", 0, "automatically stop the fetchbot after a given time")
+	stopAtUrl = flag.String("stopat", "", "automatically stop the fetchbot at a given URL")
+	memStats  = flag.Duration("memstats", 0, "display memory statistics at a given interval")
 )
 
-func ErrHandler(h fetchbot.Handler) fetchbot.Handler {
+func main() {
+	flag.Parse()
+
+	// Create the muxer
+	mux := fetchbot.NewMux()
+
+	// Handle all errors the same
+	mux.HandleErrors(fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
+		fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+	}))
+
+	// Handle GET requests for html responses, to parse the body and enqueue all links as HEAD
+	// requests.
+	mux.Response().Method("GET").ContentType("text/html").HandleFunc(
+		func(ctx *fetchbot.Context, res *http.Response, err error) {
+			// Process the body to find the links
+			doc, err := goquery.NewDocumentFromResponse(res)
+			if err != nil {
+				fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+				return
+			}
+			// Enqueue all links as HEAD requests
+			enqueueLinks(ctx, doc)
+		})
+
+	// Handle HEAD requests for html responses coming from the source host - we don't want
+	// to crawl links from other hosts.
+	mux.Response().Method("HEAD").Host("golang.org").ContentType("text/html").HandleFunc(
+		func(ctx *fetchbot.Context, res *http.Response, err error) {
+			if _, err := ctx.Q.SendStringGet(ctx.Cmd.URL().String()); err != nil {
+				fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+			}
+		})
+
+	// Create the Fetcher, handle the logging first, then dispatch to the Muxer
+	h := logHandler(mux)
+	if *stopAtUrl != "" {
+		h = stopHandler(*stopAtUrl, logHandler(mux))
+	}
+	f := fetchbot.New(h)
+	// First mem stat print must be right after creating the fetchbot
+	if *memStats > 0 {
+		// Print starting stats
+		printMemStats(nil)
+		// Run at regular intervals
+		runMemStats(f, *memStats)
+		// On exit, print ending stats after a GC
+		defer func() {
+			runtime.GC()
+			printMemStats(nil)
+		}()
+	}
+	// Start processing
+	q := f.Start()
+	if *stopAfter > 0 {
+		go func() {
+			c := time.After(*stopAfter)
+			<-c
+			q.Close()
+		}()
+	}
+	// Enqueue the seed, which is the first entry in the dup map
+	_, err := q.SendStringGet(seed)
+	if err != nil {
+		fmt.Printf("[ERR] GET %s - %s\n", seed, err)
+	}
+	q.Block()
+}
+
+func runMemStats(f *fetchbot.Fetcher, tick time.Duration) {
+	var mu sync.Mutex
+	var di *fetchbot.DebugInfo
+
+	// Start goroutine to collect fetchbot debug info
+	go func() {
+		for v := range f.Debug() {
+			mu.Lock()
+			di = v
+			mu.Unlock()
+		}
+	}()
+	// Start ticker goroutine to print mem stats at regular intervals
+	go func() {
+		c := time.Tick(tick)
+		for _ = range c {
+			mu.Lock()
+			printMemStats(di)
+			mu.Unlock()
+		}
+	}()
+}
+
+func printMemStats(di *fetchbot.DebugInfo) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(strings.Repeat("=", 72) + "\n")
+	buf.WriteString("Memory Profile:\n")
+	buf.WriteString(fmt.Sprintf("\tAlloc: %d Kb\n", mem.Alloc/1024))
+	buf.WriteString(fmt.Sprintf("\tTotalAlloc: %d Kb\n", mem.TotalAlloc/1024))
+	buf.WriteString(fmt.Sprintf("\tNumGC: %d\n", mem.NumGC))
+	buf.WriteString(fmt.Sprintf("\tGoroutines: %d\n", runtime.NumGoroutine()))
+	if di != nil {
+		buf.WriteString(fmt.Sprintf("\tNumHosts: %d\n", di.NumHosts))
+	}
+	buf.WriteString(strings.Repeat("=", 72))
+	fmt.Println(buf.String())
+}
+
+func stopHandler(stopurl string, wrapped fetchbot.Handler) fetchbot.Handler {
 	return fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
-		if err != nil {
-			fmt.Printf("error: %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
+		if ctx.Cmd.URL().String() == stopurl {
+			ctx.Q.Close()
 			return
 		}
-		h.Handle(ctx, res, err)
+		wrapped.Handle(ctx, res, err)
 	})
 }
 
-func LinksHandler(h fetchbot.Handler, host string) fetchbot.Handler {
+func logHandler(wrapped fetchbot.Handler) fetchbot.Handler {
 	return fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
-		// Save as fetched once
-		mu.Lock()
-		dup[ctx.Cmd.URL().String()] = true
-		mu.Unlock()
+		if err == nil {
+			fmt.Printf("[%d] %s %s - %s\n", res.StatusCode, ctx.Cmd.Method(), ctx.Cmd.URL(), res.Header.Get("Content-Type"))
+		}
+		wrapped.Handle(ctx, res, err)
+	})
+}
 
-		// Handle if text/html, otherwise continue. Limit fetched pages to the specified host only
-		// (linked pages to other hosts will produce a HEAD request and a log entry, but no further
-		// crawling).
-		if ctx.Cmd.URL().Host == host && strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
-			switch ctx.Cmd.Method() {
-			case "GET":
-				// Process the body to find the links
-				doc, err := goquery.NewDocumentFromResponse(res)
-				if err != nil {
-					fmt.Printf("error: parse goquery %s - %s\n", ctx.Cmd.URL(), err)
-				}
-				// Enqueue all links as HEAD requests, unless it is a duplicate
-				mu.Lock()
-				doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
-					val, _ := s.Attr("href")
-					// Resolve address
-					u, err := ctx.Cmd.URL().Parse(val)
-					if err != nil {
-						fmt.Printf("error: resolve URL %s - %s\n", val, err)
-						return
-					}
-					if !dup[u.String()] {
-						if _, err := ctx.Chan.EnqueueHead(u.String()); err != nil {
-							fmt.Printf("error: enqueue head %s - %s\n", u, err)
-						} else {
-							dup[u.String()] = true
-						}
-					}
-				})
-				mu.Unlock()
-				// Exit, since logging is done on HEAD
-				return
-
-			case "HEAD":
-				// Enqueue as a GET, we want the body. Don't check for duplicate, since it is one
-				// by definition.
-				if _, err := ctx.Chan.EnqueueGet(ctx.Cmd.URL().String()); err != nil {
-					fmt.Printf("error: enqueue get %s - %s\n", ctx.Cmd.URL(), err)
-				}
+func enqueueLinks(ctx *fetchbot.Context, doc *goquery.Document) {
+	mu.Lock()
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		val, _ := s.Attr("href")
+		// Resolve address
+		u, err := ctx.Cmd.URL().Parse(val)
+		if err != nil {
+			fmt.Printf("error: resolve URL %s - %s\n", val, err)
+			return
+		}
+		if !dup[u.String()] {
+			if _, err := ctx.Q.SendStringHead(u.String()); err != nil {
+				fmt.Printf("error: enqueue head %s - %s\n", u, err)
+			} else {
+				dup[u.String()] = true
 			}
 		}
-		// Continue with wrapped handler
-		h.Handle(ctx, res, err)
 	})
-}
-
-func LogHandler(ctx *fetchbot.Context, res *http.Response, err error) {
-	fmt.Printf("%s %s [%d]\n", res.Header.Get("Content-Type"), ctx.Cmd.URL(), res.StatusCode)
-}
-
-// TODO : Print mem and goro stats once in a while
-func main() {
-	const home = "http://golang.org"
-
-	// Create the Fetcher
-	f := fetchbot.New(ErrHandler(LinksHandler(fetchbot.HandlerFunc(LogHandler), "golang.org")))
-	// Start
-	q := f.Start()
-	// Enqueue the Go home page
-	_, err := q.EnqueueHead(home)
-	if err != nil {
-		fmt.Printf("error: enqueue head %s - %s\n", home, err)
-	}
-	// Must be manually stopped (Ctrl-C)
-	select {}
+	mu.Unlock()
 }
