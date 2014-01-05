@@ -41,7 +41,7 @@ func main() {
 
 	// Handle GET requests for html responses, to parse the body and enqueue all links as HEAD
 	// requests.
-	mux.Response().Method("GET").ContentType("text/html").HandlerFunc(
+	mux.Response().Method("GET").ContentType("text/html").Handler(fetchbot.HandlerFunc(
 		func(ctx *fetchbot.Context, res *http.Response, err error) {
 			// Process the body to find the links
 			doc, err := goquery.NewDocumentFromResponse(res)
@@ -51,16 +51,16 @@ func main() {
 			}
 			// Enqueue all links as HEAD requests
 			enqueueLinks(ctx, doc)
-		})
+		}))
 
 	// Handle HEAD requests for html responses coming from the source host - we don't want
 	// to crawl links from other hosts.
-	mux.Response().Method("HEAD").Host("golang.org").ContentType("text/html").HandlerFunc(
+	mux.Response().Method("HEAD").Host("golang.org").ContentType("text/html").Handler(fetchbot.HandlerFunc(
 		func(ctx *fetchbot.Context, res *http.Response, err error) {
 			if _, err := ctx.Q.SendStringGet(ctx.Cmd.URL().String()); err != nil {
 				fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
 			}
-		})
+		}))
 
 	// Create the Fetcher, handle the logging first, then dispatch to the Muxer
 	h := logHandler(mux)
