@@ -231,9 +231,3 @@ func (r *resEntry) Handler(h Handler) *resEntry {
 	}
 	return r
 }
-
-// HandlerFunc sets the Handler function to be called when this Response Handler is the
-// match for a given response. It registers the Response Handler in its parent Mux.
-func (r *resEntry) HandlerFunc(fn func(*Context, *http.Response, error)) *resEntry {
-	return r.Handler(HandlerFunc(fn))
-}
