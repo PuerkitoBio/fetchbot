@@ -105,6 +105,7 @@ func New(h Handler) *Fetcher {
 }
 
 // Queue offers methods to send Commands to the Fetcher, and to Stop the crawling process.
+// It is safe to use from concurrent goroutines.
 type Queue struct {
 	ch     chan Command
 	closed chan struct{}

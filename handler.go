@@ -53,7 +53,7 @@ type Mux struct {
 
 	mu   sync.RWMutex
 	errm map[error]Handler
-	res  map[*resEntry]bool // a set of entries
+	res  map[*ResponseMatcher]bool // a set of entries
 }
 
 // NewMux returns an initialized Mux.
@@ -62,7 +62,7 @@ func NewMux() *Mux {
 		// Default handler is a no-op
 		DefaultHandler: HandlerFunc(func(ctx *Context, res *http.Response, err error) {}),
 		errm:           make(map[error]Handler),
-		res:            make(map[*resEntry]bool),
+		res:            make(map[*ResponseMatcher]bool),
 	}
 }
 
@@ -118,12 +118,12 @@ func (mux *Mux) HandleErrors(h Handler) {
 
 // Response initializes an entry for a Response Handler based on various criteria.
 // The Response Handler is not registered until Handle is called.
-func (mux *Mux) Response() *resEntry {
-	return &resEntry{mux: mux}
+func (mux *Mux) Response() *ResponseMatcher {
+	return &ResponseMatcher{mux: mux}
 }
 
-// resEntry holds the criteria for the response Handler.
-type resEntry struct {
+// A ResponseMatcher holds the criteria for a response Handler.
+type ResponseMatcher struct {
 	method      string
 	contentType string
 	minStatus   int
@@ -136,7 +136,7 @@ type resEntry struct {
 
 // match indicates if the response Handler matches the provided response, and if so,
 // and if a path criteria is specified, it also indicates the length of the path match.
-func (r *resEntry) match(res *http.Response) (bool, int) {
+func (r *ResponseMatcher) match(res *http.Response) (bool, int) {
 	if r.method != "" {
 		if r.method != res.Request.Method {
 			return false, 0
@@ -178,7 +178,7 @@ func getContentType(val string) string {
 
 // Method sets a method criteria for the Response Handler. Its Handler will only be called
 // if it has this HTTP method (i.e. "GET", "HEAD", ...).
-func (r *resEntry) Method(m string) *resEntry {
+func (r *ResponseMatcher) Method(m string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.method = m
@@ -188,7 +188,7 @@ func (r *resEntry) Method(m string) *resEntry {
 // ContentType sets a criteria based on the Content-Type header for the Response Handler.
 // Its Handler will only be called if it has this content type, ignoring any additional
 // parameter on the Header value (following the semicolon, i.e. "text/html; charset=utf-8").
-func (r *resEntry) ContentType(ct string) *resEntry {
+func (r *ResponseMatcher) ContentType(ct string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.contentType = ct
@@ -197,7 +197,7 @@ func (r *resEntry) ContentType(ct string) *resEntry {
 
 // Status sets a criteria based on the Status code of the response for the Response Handler.
 // Its Handler will only be called if the response has this status code.
-func (r *resEntry) Status(code int) *resEntry {
+func (r *ResponseMatcher) Status(code int) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.minStatus = code
@@ -208,7 +208,7 @@ func (r *resEntry) Status(code int) *resEntry {
 // StatusRange sets a criteria based on the Status code of the response for the Response Handler.
 // Its Handler will only be called if the response has a status code between the min and max.
 // If min is greater than max, the values are switched.
-func (r *resEntry) StatusRange(min, max int) *resEntry {
+func (r *ResponseMatcher) StatusRange(min, max int) *ResponseMatcher {
 	if min > max {
 		min, max = max, min
 	}
@@ -222,7 +222,7 @@ func (r *resEntry) StatusRange(min, max int) *resEntry {
 // Path sets a criteria based on the path of the URL for the Response Handler. Its Handler
 // will only be called if the path of the URL starts with this path. Longer matches
 // have priority over shorter ones.
-func (r *resEntry) Path(p string) *resEntry {
+func (r *ResponseMatcher) Path(p string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.path = p
@@ -231,7 +231,7 @@ func (r *resEntry) Path(p string) *resEntry {
 
 // Host sets a criteria based on the host of the URL for the Response Handler. Its Handler
 // will only be called if the host of the URL matches exactly the specified host.
-func (r *resEntry) Host(host string) *resEntry {
+func (r *ResponseMatcher) Host(host string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.host = host
@@ -240,7 +240,7 @@ func (r *resEntry) Host(host string) *resEntry {
 
 // Handler sets the Handler to be called when this Response Handler is the match for
 // a given response. It registers the Response Handler in its parent Mux.
-func (r *resEntry) Handler(h Handler) *resEntry {
+func (r *ResponseMatcher) Handler(h Handler) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.h = h
