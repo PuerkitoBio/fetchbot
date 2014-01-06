@@ -104,8 +104,8 @@ so that the crawling stops at a certain depth, etc. For basic commands that don'
 require additional information, the package provides the Cmd struct that implements
 the Command interface.
 
-By default, the Fetcher uses the net/http default Client. A different client can
-be set on the Fetcher.HttpClient field. It also has a CrawlDelay field that is used
+By default, the Fetcher uses the net/http default Client to make requests. A different client can
+be set on the Fetcher.HttpClient field. The Fetcher also has a CrawlDelay field that is used
 only if there is no delay specified by the robots.txt of a given host. The UserAgent
 field sets the user agent string to use for the requests and to validate against
 the robots.txt entries. Finally, the Fetcher has a WorkerIdleTTL field that sets
