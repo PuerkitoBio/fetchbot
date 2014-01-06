@@ -23,10 +23,6 @@ The package has a single external dependency, robotstxt
 The API documentation is available on godoc.org
 (http://godoc.org/github.com/PuerkitoBio/fetchbot).
 
-Changelog
-
-- v0.1 : initial release.
-
 Usage
 
 The following example (taken from /example/short/main.go) shows how to create and
