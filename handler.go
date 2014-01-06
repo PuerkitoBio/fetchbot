@@ -1,3 +1,7 @@
+// Copyright 2014 Martin Angers and Contributors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package fetchbot
 
 import (
@@ -30,6 +34,20 @@ func (h HandlerFunc) Handle(ctx *Context, res *http.Response, err error) {
 
 // Mux is a simple multiplexer for the Handler interface, similar to net/http.ServeMux.
 // It is itself a Handler, and dispatches the calls to the matching Handlers.
+//
+// For error Handlers, if there is a Handler registered for the same error value,
+// it will be called. Otherwise, if there is a Handler registered for any error,
+// this Handler will be called.
+//
+// For Response Handlers, a match with a path criteria has higher priority than other
+// matches, and the longer path match will get called.
+//
+// If multiple Response handlers with the same path length (or no path criteria)
+// match a response, the actual handler called is undefined, but one and only one
+// will be called.
+//
+// In any case, if no Handler matches, the DefaultHandler is called, and it
+// defaults to a no-op.
 type Mux struct {
 	DefaultHandler Handler
 

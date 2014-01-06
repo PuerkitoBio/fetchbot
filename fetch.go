@@ -1,3 +1,7 @@
+// Copyright 2014 Martin Angers and Contributors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package fetchbot
 
 import (
@@ -300,7 +304,7 @@ func (f *Fetcher) freeIdleHosts() {
 			delete(f.hostToIdleElem, hostts.host)
 			newe := e.Next()
 			f.idleList.Remove(e)
-			// Continue with next element, there may be more the free
+			// Continue with next element, there may be more to free
 			e = newe
 		} else {
 			// The list is ordered by oldest first, so as soon as one host is not passed

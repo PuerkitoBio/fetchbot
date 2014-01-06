@@ -1,6 +1,11 @@
+// Copyright 2014 Martin Angers and Contributors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package fetchbot
 
 import (
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,16 +15,28 @@ import (
 )
 
 type spyHandler struct {
-	mu   sync.Mutex
-	cmds []Command
-	errs []error
-	fn   Handler
+	mu     sync.Mutex
+	cmds   []Command
+	errs   []error
+	res    []*http.Response
+	bodies []string
+	fn     Handler
 }
 
 func (sh *spyHandler) Handle(ctx *Context, res *http.Response, err error) {
 	sh.mu.Lock()
 	sh.cmds = append(sh.cmds, ctx.Cmd)
 	sh.errs = append(sh.errs, err)
+	sh.res = append(sh.res, res)
+	if res == nil {
+		sh.bodies = append(sh.bodies, "")
+	} else {
+		b, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			sh.bodies = append(sh.bodies, "")
+		}
+		sh.bodies = append(sh.bodies, string(b))
+	}
 	sh.mu.Unlock()
 	if sh.fn != nil {
 		sh.fn.Handle(ctx, res, err)
@@ -63,6 +80,38 @@ func (sh *spyHandler) ErrorFor(rawurl string) error {
 		return sh.errs[ix]
 	}
 	return nil
+}
+
+func (sh *spyHandler) StatusFor(rawurl string) int {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	ix := -1
+	for i, c := range sh.cmds {
+		if c.URL().String() == rawurl {
+			ix = i
+			break
+		}
+	}
+	if ix >= 0 && sh.res[ix] != nil {
+		return sh.res[ix].StatusCode
+	}
+	return -1
+}
+
+func (sh *spyHandler) BodyFor(rawurl string) string {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	ix := -1
+	for i, c := range sh.cmds {
+		if c.URL().String() == rawurl {
+			ix = i
+			break
+		}
+	}
+	if ix >= 0 {
+		return sh.bodies[ix]
+	}
+	return ""
 }
 
 func (sh *spyHandler) CalledWithExactly(rawurl ...string) bool {
