@@ -137,6 +137,8 @@ func printMemStats(di *fetchbot.DebugInfo) {
 	fmt.Println(buf.String())
 }
 
+// stopHandler stops the fetcher if the stopurl is reached. Otherwise it dispatches
+// the call to the wrapped Handler.
 func stopHandler(stopurl string, wrapped fetchbot.Handler) fetchbot.Handler {
 	return fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
 		if ctx.Cmd.URL().String() == stopurl {
@@ -147,6 +149,7 @@ func stopHandler(stopurl string, wrapped fetchbot.Handler) fetchbot.Handler {
 	})
 }
 
+// logHandler prints the fetch information and dispatches the call to the wrapped Handler.
 func logHandler(wrapped fetchbot.Handler) fetchbot.Handler {
 	return fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
 		if err == nil {
