@@ -123,7 +123,7 @@ Normalization can easily be done (e.g. using [purell](https://github.com/Puerkit
 How to keep track of visited URLs depends on the use-case of the specific crawler,
 but for an example, see /example/full/main.go.
 
-License
+## License
 
 The [BSD 3-Clause license](http://opensource.org/licenses/BSD-3-Clause), the same as
 the Go language. The iq package source code is under the CDDL-1.0 license (details in
