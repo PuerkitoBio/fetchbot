@@ -76,7 +76,7 @@ type Fetcher struct {
 	// (processQueue) so no sync is required.
 
 	// hosts maps the host names to its dedicated requests channel.
-	hosts map[string]*hostFetcher
+	hosts map[string]*hostFetcherInfiniteQ
 	// hostToIdleElem keeps an O(1) access from a host to its corresponding element in the
 	// idle list.
 	hostToIdleElem map[string]*list.Element
@@ -85,13 +85,22 @@ type Fetcher struct {
 	idleList *list.List
 }
 
-// A hostFetcher receives commands on cmd that all pertain to a single host and
-// executes them, subject to robots.txt.  Errors and response are fed to CmdHandler.
-type hostFetcher struct {
+// A HostFetcher receives commands on CmdIn that all pertain to the host in BaseURL.
+// Commands are subject to robots.txt rules and rate limits.  Errors and responses are
+// fed to the CmdHandler.
+type HostFetcher struct {
 	CrawlConfig
-	Host string
+	BaseURL *url.URL
 	CmdHandler
-	cmd chan Command
+	CmdIn chan Command
+	agent *robotstxt.Group
+	wait  <-chan time.Time
+	delay time.Duration
+}
+
+type hostFetcherInfiniteQ struct {
+	HostFetcher
+	InfCmdIn chan Command
 }
 
 // The DebugInfo holds information to introspect the Fetcher's state.
@@ -205,7 +214,7 @@ func (q *Queue) sendWithMethod(method string, rawurl []string) (int, error) {
 // Start the Fetcher, and returns the Queue to use to send Commands to be fetched.
 func (f *Fetcher) Start() *Queue {
 	// Create the internal maps and lists
-	f.hosts = make(map[string]*hostFetcher)
+	f.hosts = make(map[string]*hostFetcherInfiniteQ)
 	f.hostToIdleElem = make(map[string]*list.Element)
 	f.idleList = list.New()
 	// Create the Queue
@@ -253,33 +262,26 @@ loop:
 	// handlers for each in the worker goro, and then the infinite queue goro will terminate
 	// and close the `out` channel, which in turn will terminate the worker goro.
 	for _, hf := range f.hosts {
-		close(hf.cmd)
+		close(hf.InfCmdIn)
 	}
 	f.q.wg.Done()
 }
 
 func (f *Fetcher) handleCommand(v Command) error {
 	u := v.URL()
-	if u.Host == "" {
-		// The URL must be rooted with a host. 
-		return ErrEmptyHost
-	}
 	// Check if a channel is already started for this host
 	hf, ok := f.hosts[u.Host]
 	if !ok {
 		// Start a new channel and goroutine for this host.
-		rob, err := u.Parse("/robots.txt")
+		newhf, err := f.newHostFetcher(u)
 		if err != nil {
 			return err
 		}
-		hf = f.newHostFetcher(u.Host)
-		f.hosts[u.Host] = hf
-
-		// Enqueue the robots.txt request first.
-		hf.cmd <- robotCommand{&Cmd{U: rob, M: "GET"}}
+		f.hosts[u.Host] = newhf
+		hf = newhf
 	}
 	// Send the request
-	hf.cmd <- v
+	hf.InfCmdIn <- v
 	// Adjust the timestamp for this host's idle TTL
 	f.setHostTimestamp(u.Host)
 	// Garbage collect idle hosts
@@ -292,7 +294,16 @@ func (f *Fetcher) handleCommand(v Command) error {
 	return nil
 }
 
-func (f *Fetcher) newHostFetcher(host string) *hostFetcher {
+func (f *Fetcher) newHostFetcher(u *url.URL) (*hostFetcherInfiniteQ, error) {
+	if u.Host == "" {
+		// The URL must be rooted with a host. 
+		return nil, ErrEmptyHost
+	}
+	baseurl, err := u.Parse("/")
+	if err != nil {
+		return nil, err
+	}
+
 	// Create the infinite queue: the in channel to send on, and the out channel
 	// to read from in the host's goroutine, and add to the hosts map
 	var out chan Command
@@ -300,16 +311,16 @@ func (f *Fetcher) newHostFetcher(host string) *hostFetcher {
 	chand := CmdHandlerFunc(func(cmd Command, res *http.Response, err error) {
 		f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
 	})
-	hf := newHostFetcher(f.CrawlConfig, host, chand, in)
+	hf := NewHostFetcher(f.CrawlConfig, baseurl, chand, out)
 	// Start the infinite queue goroutine for this host
 	go sliceIQ(in, out)
 	// Start the working goroutine for this host
 	f.q.wg.Add(1)
 	go func() {
-		hf.processChan(out)
+		hf.Start()
 		f.q.wg.Done()
 	}()
-	return hf
+	return &hostFetcherInfiniteQ{*hf, in}, nil
 }
 
 // Add the host to the idle list, along with its last access timestamp. The idle
@@ -332,7 +343,7 @@ func (f *Fetcher) freeIdleHosts() {
 			hf := f.hosts[hostts.host]
 			// Remove and close this host's channel
 			delete(f.hosts, hostts.host)
-			close(hf.cmd)
+			close(hf.CmdIn)
 			// Remove from idle list
 			delete(f.hostToIdleElem, hostts.host)
 			newe := e.Next()
@@ -347,66 +358,73 @@ func (f *Fetcher) freeIdleHosts() {
 	}
 }
 
-// New returns an initialized Fetcher.
-func newHostFetcher(c CrawlConfig, host string, chand CmdHandler, cmd chan Command) *hostFetcher {
-	return &hostFetcher{c, host, chand, cmd}
+func NewHostFetcher(c CrawlConfig, baseurl *url.URL, chand CmdHandler, cmd chan Command) *HostFetcher {
+	return &HostFetcher{
+		CrawlConfig: c,
+		BaseURL: baseurl,
+		CmdHandler: chand,
+		CmdIn: cmd,
+		delay: c.CrawlDelay,
+	}
+}
+
+func (f *HostFetcher) Start() {
+	f.fetchRobotsTxt()
+	if f.agent != nil && f.agent.CrawlDelay > 0 {
+		f.delay = f.agent.CrawlDelay
+	}
+	if f.delay != 0 {
+		f.wait = time.After(f.delay)
+	}
+	f.processChan()
 }
 
 // Goroutine for a host's worker, processing requests for all its URLs.
-func (f *hostFetcher) processChan(ch chan Command) {
-	var (
-		agent *robotstxt.Group
-		wait  <-chan time.Time
-		delay = f.CrawlDelay
-	)
-
-	for v := range ch {
+func (f *HostFetcher) processChan() {
+	for v := range f.CmdIn {
 		// Wait for the prescribed delay
-		if wait != nil {
-			<-wait
+		if f.wait != nil {
+			<-f.wait
 		}
-		switch r, ok := v.(robotCommand); {
-		case ok:
-			// This is the robots.txt request
-			agent = f.getRobotAgent(r)
-			// Initialize the crawl delay
-			if agent != nil && agent.CrawlDelay > 0 {
-				delay = agent.CrawlDelay
-			}
-			wait = time.After(delay)
-		case agent == nil || agent.Test(v.URL().Path):
+		if f.agent == nil || f.agent.Test(v.URL().Path) {
 			// Path allowed, process the request
 			res, err := f.doRequest(v)
 			f.visit(v, res, err)
-			wait = time.After(delay)
-		default:
+			f.wait = time.After(f.delay)
+		} else {
 			// Path disallowed by robots.txt
 			f.visit(v, nil, ErrDisallowed)
-			wait = nil
+			f.wait = nil
 		}
 	}
 }
 
 // Get the robots.txt User-Agent-specific group.
-func (f *hostFetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
-	res, err := f.doRequest(r)
+func (f *HostFetcher) fetchRobotsTxt() {
+	rob, err := f.BaseURL.Parse("/robots.txt")
+	if err != nil {
+		// This shouldn't be possible:
+		panic("unable to parse /robots.txt")
+	}
+
+	res, err := f.doRequest(robotCommand{&Cmd{U: rob, M: "GET"}})
 	if err != nil {
 		// TODO: Ignore robots.txt request error?
 		fmt.Fprintf(os.Stderr, "fetchbot: error fetching robots.txt: %s\n", err)
-		return nil
+		return
 	}
 	defer res.Body.Close()
 	robData, err := robotstxt.FromResponse(res)
 	if err != nil {
 		// TODO : Ignore robots.txt parse error?
 		fmt.Fprintf(os.Stderr, "fetchbot: error parsing robots.txt: %s\n", err)
-		return nil
+		return
 	}
-	return robData.FindGroup(f.UserAgent)
+	f.agent = robData.FindGroup(f.UserAgent)
 }
 
 // Call the Handler for this Command. Closes the response's body.
-func (f *hostFetcher) visit(cmd Command, res *http.Response, err error) {
+func (f *HostFetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil {
 		defer res.Body.Close()
 	}
@@ -414,10 +432,10 @@ func (f *hostFetcher) visit(cmd Command, res *http.Response, err error) {
 }
 
 // Prepare and execute the request for this Command.
-func (f *hostFetcher) doRequest(r Command) (*http.Response, error) {
-	if r.URL().Host != f.Host {
-		return nil, fmt.Errorf("received Command for host '%s' but I only service host '%s'",
-		                       r.URL().Host, f.Host)
+func (f *HostFetcher) doRequest(r Command) (*http.Response, error) {
+	if r.URL().Host != f.BaseURL.Host {
+		return nil, fmt.Errorf("received Command for wrong host '%s'",
+		                       r.URL().Host)
 	}
 	req, err := http.NewRequest(r.Method(), r.URL().String(), nil)
 	if err != nil {
