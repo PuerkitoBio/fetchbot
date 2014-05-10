@@ -10,6 +10,21 @@ import (
 	"sync"
 )
 
+// The CmdHandler interface is used to process the HostFetcher's requests. It is similar to the
+// net/http.Handler interface.
+type CmdHandler interface {
+	HandleCmd(Command, *http.Response, error)
+}
+
+// A CmdHandlerFunc is a function signature that implements the CmdHandler interface. A function
+// with this signature can thus be used as a CmdHandler.
+type CmdHandlerFunc func(Command, *http.Response, error)
+
+// HandleCmd is the CmdHandler interface implementation for the CmdHandlerFunc type.
+func (h CmdHandlerFunc) HandleCmd(cmd Command, res *http.Response, err error) {
+	h(cmd, res, err)
+}
+
 // Context is a Command's fetch context, passed to the Handler. It gives access to the
 // original Command and the associated Queue.
 type Context struct {

@@ -42,10 +42,6 @@ const (
 )
 
 type CrawlConfig struct {
-	// The Handler to be called for each request. All successfully enqueued requests
-	// produce a Handler call.
-	Handler Handler
-
 	// Default delay to use between requests to a same host if there is no robots.txt
 	// crawl delay.
 	CrawlDelay time.Duration
@@ -62,6 +58,10 @@ type CrawlConfig struct {
 // A Fetcher defines the parameters for running a web crawler.
 type Fetcher struct {
 	CrawlConfig
+
+	// The Handler to be called for each request. All successfully enqueued requests
+	// produce a Handler call.
+	Handler Handler
 
 	// The time a host-dedicated worker goroutine can stay idle, with no Command to enqueue,
 	// before it is stopped and cleared from memory.
@@ -89,9 +89,8 @@ type Fetcher struct {
 // and executes them, subject to robots.txt.
 type hostFetcher struct {
 	CrawlConfig
-	host string
-	// q holds the Queue to send data to the fetcher
-	q *Queue
+	Host string
+	CmdHandler
 	cmd chan Command
 }
 
@@ -110,13 +109,13 @@ type hostTimestamp struct {
 // New returns an initialized Fetcher.
 func New(h Handler) *Fetcher {
 	cfg := CrawlConfig{
-		Handler:       h,
 		CrawlDelay:    DefaultCrawlDelay,
 		HttpClient:    http.DefaultClient,
 		UserAgent:     DefaultUserAgent,
 	}
 	return &Fetcher{
 		CrawlConfig:   cfg,
+		Handler:       h,
 		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		dbg:           make(chan *DebugInfo, 1),
 	}
@@ -267,12 +266,19 @@ loop:
 			// to read from in the host's goroutine, and add to the hosts map
 			var out chan Command
 			in, out := make(chan Command, 1), make(chan Command, 1)
-			hf = newHostFetcher(f.CrawlConfig, u.Host, f.q, in)
+			chand := CmdHandlerFunc(func(cmd Command, res *http.Response, err error) {
+				f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
+			})
+			hf = newHostFetcher(f.CrawlConfig, u.Host, chand, in)
 			f.hosts[u.Host] = hf
 			// Start the infinite queue goroutine for this host
 			go sliceIQ(in, out)
 			// Start the working goroutine for this host
-			go hf.processChan(out)
+			f.q.wg.Add(1)
+			go func() {
+				hf.processChan(out)
+				f.q.wg.Done()
+			}()
 			// Enqueue the robots.txt request first.
 			hf.cmd <- robotCommand{&Cmd{U: rob, M: "GET"}}
 		}
@@ -334,8 +340,8 @@ func (f *Fetcher) freeIdleHosts() {
 }
 
 // New returns an initialized Fetcher.
-func newHostFetcher(c CrawlConfig, host string, q *Queue, cmd chan Command) *hostFetcher {
-	return &hostFetcher{c, host, q, cmd}
+func newHostFetcher(c CrawlConfig, host string, chand CmdHandler, cmd chan Command) *hostFetcher {
+	return &hostFetcher{c, host, chand, cmd}
 }
 
 // Goroutine for a host's worker, processing requests for all its URLs.
@@ -346,7 +352,6 @@ func (f *hostFetcher) processChan(ch chan Command) {
 		delay = f.CrawlDelay
 	)
 
-	f.q.wg.Add(1)
 	for v := range ch {
 		// Wait for the prescribed delay
 		if wait != nil {
@@ -372,7 +377,6 @@ func (f *hostFetcher) processChan(ch chan Command) {
 			wait = nil
 		}
 	}
-	f.q.wg.Done()
 }
 
 // Get the robots.txt User-Agent-specific group.
@@ -398,11 +402,15 @@ func (f *hostFetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil {
 		defer res.Body.Close()
 	}
-	f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
+	f.CmdHandler.HandleCmd(cmd, res, err)
 }
 
 // Prepare and execute the request for this Command.
 func (f *hostFetcher) doRequest(r Command) (*http.Response, error) {
+	if r.URL().Host != f.Host {
+		return nil, fmt.Errorf("received Command for host '%s' but I only service host '%s'",
+		                       r.URL().Host, f.Host)
+	}
 	req, err := http.NewRequest(r.Method(), r.URL().String(), nil)
 	if err != nil {
 		return nil, err
