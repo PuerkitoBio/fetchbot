@@ -41,8 +41,7 @@ const (
 	DefaultWorkerIdleTTL = 30 * time.Second
 )
 
-// A Fetcher defines the parameters for running a web crawler.
-type Fetcher struct {
+type CrawlConfig struct {
 	// The Handler to be called for each request. All successfully enqueued requests
 	// produce a Handler call.
 	Handler Handler
@@ -58,6 +57,12 @@ type Fetcher struct {
 	// The user-agent string to use for robots.txt validation and URL fetching.
 	UserAgent string
 
+}
+
+// A Fetcher defines the parameters for running a web crawler.
+type Fetcher struct {
+	CrawlConfig
+
 	// The time a host-dedicated worker goroutine can stay idle, with no Command to enqueue,
 	// before it is stopped and cleared from memory.
 	WorkerIdleTTL time.Duration
@@ -71,13 +76,23 @@ type Fetcher struct {
 	// (processQueue) so no sync is required.
 
 	// hosts maps the host names to its dedicated requests channel.
-	hosts map[string]chan Command
+	hosts map[string]*hostFetcher
 	// hostToIdleElem keeps an O(1) access from a host to its corresponding element in the
 	// idle list.
 	hostToIdleElem map[string]*list.Element
 	// idleList keeps a sorted list of hosts in order of last access, so that removing idle
 	// workers is a quick and easy process.
 	idleList *list.List
+}
+
+// A hostFetcher receives commands on cmd that all pertain to a single host
+// and executes them, subject to robots.txt.
+type hostFetcher struct {
+	CrawlConfig
+	host string
+	// q holds the Queue to send data to the fetcher
+	q *Queue
+	cmd chan Command
 }
 
 // The DebugInfo holds information to introspect the Fetcher's state.
@@ -94,11 +109,14 @@ type hostTimestamp struct {
 
 // New returns an initialized Fetcher.
 func New(h Handler) *Fetcher {
-	return &Fetcher{
+	cfg := CrawlConfig{
 		Handler:       h,
 		CrawlDelay:    DefaultCrawlDelay,
 		HttpClient:    http.DefaultClient,
 		UserAgent:     DefaultUserAgent,
+	}
+	return &Fetcher{
+		CrawlConfig:   cfg,
 		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		dbg:           make(chan *DebugInfo, 1),
 	}
@@ -188,7 +206,7 @@ func (q *Queue) sendWithMethod(method string, rawurl []string) (int, error) {
 // Start the Fetcher, and returns the Queue to use to send Commands to be fetched.
 func (f *Fetcher) Start() *Queue {
 	// Create the internal maps and lists
-	f.hosts = make(map[string]chan Command)
+	f.hosts = make(map[string]*hostFetcher)
 	f.hostToIdleElem = make(map[string]*list.Element)
 	f.idleList = list.New()
 	// Create the Queue
@@ -234,7 +252,7 @@ loop:
 			continue
 		}
 		// Check if a channel is already started for this host
-		in, ok := f.hosts[u.Host]
+		hf, ok := f.hosts[u.Host]
 		if !ok {
 			// Start a new channel and goroutine for this host.
 
@@ -248,18 +266,18 @@ loop:
 			// Create the infinite queue: the in channel to send on, and the out channel
 			// to read from in the host's goroutine, and add to the hosts map
 			var out chan Command
-			in, out = make(chan Command, 1), make(chan Command, 1)
-			f.hosts[u.Host] = in
-			f.q.wg.Add(1)
+			in, out := make(chan Command, 1), make(chan Command, 1)
+			hf = newHostFetcher(f.CrawlConfig, u.Host, f.q, in)
+			f.hosts[u.Host] = hf
 			// Start the infinite queue goroutine for this host
 			go sliceIQ(in, out)
 			// Start the working goroutine for this host
-			go f.processChan(out)
+			go hf.processChan(out)
 			// Enqueue the robots.txt request first.
-			in <- robotCommand{&Cmd{U: rob, M: "GET"}}
+			hf.cmd <- robotCommand{&Cmd{U: rob, M: "GET"}}
 		}
 		// Send the request
-		in <- v
+		hf.cmd <- v
 		// Adjust the timestamp for this host's idle TTL
 		f.setHostTimestamp(u.Host)
 		// Garbage collect idle hosts
@@ -274,8 +292,8 @@ loop:
 	// channels of the infinite queue. It will then drain any pending events, triggering the
 	// handlers for each in the worker goro, and then the infinite queue goro will terminate
 	// and close the `out` channel, which in turn will terminate the worker goro.
-	for _, ch := range f.hosts {
-		close(ch)
+	for _, hf := range f.hosts {
+		close(hf.cmd)
 	}
 	f.q.wg.Done()
 }
@@ -297,10 +315,10 @@ func (f *Fetcher) freeIdleHosts() {
 	for e := f.idleList.Front(); e != nil; {
 		hostts := e.Value.(*hostTimestamp)
 		if time.Now().Sub(hostts.ts) > f.WorkerIdleTTL {
-			ch := f.hosts[hostts.host]
+			hf := f.hosts[hostts.host]
 			// Remove and close this host's channel
 			delete(f.hosts, hostts.host)
-			close(ch)
+			close(hf.cmd)
 			// Remove from idle list
 			delete(f.hostToIdleElem, hostts.host)
 			newe := e.Next()
@@ -315,14 +333,20 @@ func (f *Fetcher) freeIdleHosts() {
 	}
 }
 
+// New returns an initialized Fetcher.
+func newHostFetcher(c CrawlConfig, host string, q *Queue, cmd chan Command) *hostFetcher {
+	return &hostFetcher{c, host, q, cmd}
+}
+
 // Goroutine for a host's worker, processing requests for all its URLs.
-func (f *Fetcher) processChan(ch <-chan Command) {
+func (f *hostFetcher) processChan(ch chan Command) {
 	var (
 		agent *robotstxt.Group
 		wait  <-chan time.Time
 		delay = f.CrawlDelay
 	)
 
+	f.q.wg.Add(1)
 	for v := range ch {
 		// Wait for the prescribed delay
 		if wait != nil {
@@ -352,7 +376,7 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 }
 
 // Get the robots.txt User-Agent-specific group.
-func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
+func (f *hostFetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 	res, err := f.doRequest(r)
 	if err != nil {
 		// TODO: Ignore robots.txt request error?
@@ -370,7 +394,7 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 }
 
 // Call the Handler for this Command. Closes the response's body.
-func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
+func (f *hostFetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil {
 		defer res.Body.Close()
 	}
@@ -378,7 +402,7 @@ func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
 }
 
 // Prepare and execute the request for this Command.
-func (f *Fetcher) doRequest(r Command) (*http.Response, error) {
+func (f *hostFetcher) doRequest(r Command) (*http.Response, error) {
 	req, err := http.NewRequest(r.Method(), r.URL().String(), nil)
 	if err != nil {
 		return nil, err
