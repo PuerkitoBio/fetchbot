@@ -85,8 +85,8 @@ type Fetcher struct {
 	idleList *list.List
 }
 
-// A hostFetcher receives commands on cmd that all pertain to a single host
-// and executes them, subject to robots.txt.
+// A hostFetcher receives commands on cmd that all pertain to a single host and
+// executes them, subject to robots.txt.  Errors and response are fed to CmdHandler.
 type hostFetcher struct {
 	CrawlConfig
 	Host string
@@ -243,55 +243,9 @@ loop:
 				// Keep going
 			}
 		}
-		u := v.URL()
-		if u.Host == "" {
-			// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
-			// goroutine must not block.
+		if err := f.handleCommand(v); err != nil {
+			// Handle on a separate goroutine, the Queue goroutine must not block.
 			go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, ErrEmptyHost)
-			continue
-		}
-		// Check if a channel is already started for this host
-		hf, ok := f.hosts[u.Host]
-		if !ok {
-			// Start a new channel and goroutine for this host.
-
-			// Must send the robots.txt request.
-			rob, err := u.Parse("/robots.txt")
-			if err != nil {
-				// Handle on a separate goroutine, the Queue goroutine must not block.
-				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
-				continue
-			}
-			// Create the infinite queue: the in channel to send on, and the out channel
-			// to read from in the host's goroutine, and add to the hosts map
-			var out chan Command
-			in, out := make(chan Command, 1), make(chan Command, 1)
-			chand := CmdHandlerFunc(func(cmd Command, res *http.Response, err error) {
-				f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
-			})
-			hf = newHostFetcher(f.CrawlConfig, u.Host, chand, in)
-			f.hosts[u.Host] = hf
-			// Start the infinite queue goroutine for this host
-			go sliceIQ(in, out)
-			// Start the working goroutine for this host
-			f.q.wg.Add(1)
-			go func() {
-				hf.processChan(out)
-				f.q.wg.Done()
-			}()
-			// Enqueue the robots.txt request first.
-			hf.cmd <- robotCommand{&Cmd{U: rob, M: "GET"}}
-		}
-		// Send the request
-		hf.cmd <- v
-		// Adjust the timestamp for this host's idle TTL
-		f.setHostTimestamp(u.Host)
-		// Garbage collect idle hosts
-		f.freeIdleHosts()
-		// Send debug info, but do not block if full
-		select {
-		case f.dbg <- &DebugInfo{len(f.hosts)}:
-		default:
 		}
 	}
 	// Close all host channels now that it is impossible to send on those. Those are the `in`
@@ -302,6 +256,60 @@ loop:
 		close(hf.cmd)
 	}
 	f.q.wg.Done()
+}
+
+func (f *Fetcher) handleCommand(v Command) error {
+	u := v.URL()
+	if u.Host == "" {
+		// The URL must be rooted with a host. 
+		return ErrEmptyHost
+	}
+	// Check if a channel is already started for this host
+	hf, ok := f.hosts[u.Host]
+	if !ok {
+		// Start a new channel and goroutine for this host.
+		rob, err := u.Parse("/robots.txt")
+		if err != nil {
+			return err
+		}
+		hf = f.newHostFetcher(u.Host)
+		f.hosts[u.Host] = hf
+
+		// Enqueue the robots.txt request first.
+		hf.cmd <- robotCommand{&Cmd{U: rob, M: "GET"}}
+	}
+	// Send the request
+	hf.cmd <- v
+	// Adjust the timestamp for this host's idle TTL
+	f.setHostTimestamp(u.Host)
+	// Garbage collect idle hosts
+	f.freeIdleHosts()
+	// Send debug info, but do not block if full
+	select {
+	case f.dbg <- &DebugInfo{len(f.hosts)}:
+	default:
+	}
+	return nil
+}
+
+func (f *Fetcher) newHostFetcher(host string) *hostFetcher {
+	// Create the infinite queue: the in channel to send on, and the out channel
+	// to read from in the host's goroutine, and add to the hosts map
+	var out chan Command
+	in, out := make(chan Command, 1), make(chan Command, 1)
+	chand := CmdHandlerFunc(func(cmd Command, res *http.Response, err error) {
+		f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
+	})
+	hf := newHostFetcher(f.CrawlConfig, host, chand, in)
+	// Start the infinite queue goroutine for this host
+	go sliceIQ(in, out)
+	// Start the working goroutine for this host
+	f.q.wg.Add(1)
+	go func() {
+		hf.processChan(out)
+		f.q.wg.Done()
+	}()
+	return hf
 }
 
 // Add the host to the idle list, along with its last access timestamp. The idle
