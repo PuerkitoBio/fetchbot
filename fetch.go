@@ -78,6 +78,9 @@ type Fetcher struct {
 	// idleList keeps a sorted list of hosts in order of last access, so that removing idle
 	// workers is a quick and easy process.
 	idleList *list.List
+
+	// sema limits the number of host goroutines which may run at once.
+	sema chan int
 }
 
 // The DebugInfo holds information to introspect the Fetcher's state.
@@ -93,7 +96,7 @@ type hostTimestamp struct {
 }
 
 // New returns an initialized Fetcher.
-func New(h Handler) *Fetcher {
+func New(h Handler, simultaneousCrawls int) *Fetcher {
 	return &Fetcher{
 		Handler:       h,
 		CrawlDelay:    DefaultCrawlDelay,
@@ -101,6 +104,7 @@ func New(h Handler) *Fetcher {
 		UserAgent:     DefaultUserAgent,
 		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		dbg:           make(chan *DebugInfo, 1),
+		sema:          make(chan int, simultaneousCrawls),
 	}
 }
 
@@ -328,6 +332,10 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 		if wait != nil {
 			<-wait
 		}
+
+		// Wait for the semaphore
+		f.sema <- 1
+
 		switch r, ok := v.(robotCommand); {
 		case ok:
 			// This is the robots.txt request
@@ -347,6 +355,9 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 			f.visit(v, nil, ErrDisallowed)
 			wait = nil
 		}
+		// After crawling one page, drain one item from
+		// semaphore
+		<-f.sema
 	}
 	f.q.wg.Done()
 }
@@ -359,7 +370,7 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 		fmt.Fprintf(os.Stderr, "fetchbot: error fetching robots.txt: %s\n", err)
 		return nil
 	}
-	defer res.Body.Close()
+	defer bodyConnectionClose(res)
 	robData, err := robotstxt.FromResponse(res)
 	if err != nil {
 		// TODO : Ignore robots.txt parse error?
@@ -369,10 +380,17 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 	return robData.FindGroup(f.UserAgent)
 }
 
+func bodyConnectionClose(res *http.Response) {
+	if res != nil {
+		ioutil.ReadAll(res.Body)
+		res.Body.Close()
+	}
+}
+
 // Call the Handler for this Command. Closes the response's body.
 func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil {
-		defer res.Body.Close()
+		defer bodyConnectionClose(res)
 	}
 	f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
 }
@@ -424,6 +442,7 @@ func (f *Fetcher) doRequest(r Command) (*http.Response, error) {
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", f.UserAgent)
 	}
+
 	// Do the request.
 	res, err := f.HttpClient.Do(req)
 	if err != nil {
