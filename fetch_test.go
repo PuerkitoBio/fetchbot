@@ -141,7 +141,7 @@ const concurrentCrawls = 1000
 
 // Test that an initialized Fetcher has the right defaults.
 func TestNew(t *testing.T) {
-	f := New(nopHandler, concurrentCrawls)
+	f := New(nopHandler)
 	if f.CrawlDelay != DefaultCrawlDelay {
 		t.Errorf("expected CrawlDelay to be %s, got %s", DefaultCrawlDelay, f.CrawlDelay)
 	}
@@ -157,7 +157,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestQueueClosed(t *testing.T) {
-	f := New(nil, concurrentCrawls)
+	f := New(nil)
 	q := f.Start()
 	q.Close()
 	_, err := q.SendStringGet("a")
@@ -180,7 +180,7 @@ func TestBlock(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	_, err := q.SendStringGet(cases...)
@@ -227,7 +227,7 @@ func TestSendVariadic(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	n, err := q.SendStringGet(cases...)
@@ -264,7 +264,7 @@ func TestUserAgent(t *testing.T) {
 	cases := []string{srv.URL + "/a"}
 
 	// Start the Fetcher
-	f := New(nil, concurrentCrawls)
+	f := New(nil)
 	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
 		if f.UserAgent != res.Request.UserAgent() {
 			t.Errorf("expected user agent %s, got %s", f.UserAgent, res.Request.UserAgent())
@@ -299,7 +299,7 @@ func TestSendString(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
@@ -353,7 +353,7 @@ Disallow: /a
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for _, c := range cases {
@@ -398,7 +398,7 @@ Crawl-delay: 1
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	start := time.Now()
 	q := f.Start()
@@ -450,7 +450,7 @@ Crawl-delay: 1
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 2 * time.Second
 	start := time.Now()
 	q := f.Start()
@@ -493,7 +493,7 @@ func TestCustomCommand(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for i, c := range cases {
@@ -540,7 +540,7 @@ func TestFreeIdleHost(t *testing.T) {
 
 	// Start the Fetcher
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	f.WorkerIdleTTL = 100 * time.Millisecond
 	q := f.Start()
@@ -571,7 +571,7 @@ func TestFreeIdleHost(t *testing.T) {
 }
 
 func TestRestart(t *testing.T) {
-	f := New(nil, concurrentCrawls)
+	f := New(nil)
 	f.CrawlDelay = 0
 	for i := 0; i < 2; i++ {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -617,7 +617,7 @@ func TestOverflowBuffer(t *testing.T) {
 			}
 		}
 	})}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	_, err := q.SendStringGet(cases[0])

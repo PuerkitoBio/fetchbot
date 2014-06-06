@@ -65,7 +65,7 @@ func TestBasicAuth(t *testing.T) {
 		},
 	}
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for i, c := range cases {
@@ -171,7 +171,7 @@ func TestBody(t *testing.T) {
 		},
 	}
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for i, c := range cases {
@@ -233,7 +233,7 @@ func TestHeader(t *testing.T) {
 		},
 	}
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	for i, c := range cases {
@@ -319,7 +319,7 @@ func TestFullCmd(t *testing.T) {
 	defer srv.Close()
 
 	sh := &spyHandler{}
-	f := New(sh, concurrentCrawls)
+	f := New(sh)
 	f.CrawlDelay = 0
 	q := f.Start()
 	cmd := &fullCmd{

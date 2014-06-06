@@ -39,6 +39,8 @@ const (
 	// The default time-to-live of an idle host worker goroutine. If no URL is sent
 	// for a given host within this duration, this host's goroutine is disposed of.
 	DefaultWorkerIdleTTL = 30 * time.Second
+	// The default number of crawls which may proceed simultaneously
+	DefaultConcurrency = 100
 )
 
 // A Fetcher defines the parameters for running a web crawler.
@@ -80,6 +82,7 @@ type Fetcher struct {
 	idleList *list.List
 
 	// sema limits the number of host goroutines which may run at once.
+	Concurrency int
 	sema chan int
 }
 
@@ -96,7 +99,7 @@ type hostTimestamp struct {
 }
 
 // New returns an initialized Fetcher.
-func New(h Handler, simultaneousCrawls int) *Fetcher {
+func New(h Handler) *Fetcher {
 	return &Fetcher{
 		Handler:       h,
 		CrawlDelay:    DefaultCrawlDelay,
@@ -104,7 +107,7 @@ func New(h Handler, simultaneousCrawls int) *Fetcher {
 		UserAgent:     DefaultUserAgent,
 		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		dbg:           make(chan *DebugInfo, 1),
-		sema:          make(chan int, simultaneousCrawls),
+		Concurrency:   DefaultConcurrency,
 	}
 }
 
@@ -200,6 +203,10 @@ func (f *Fetcher) Start() *Queue {
 		ch:     make(chan Command, 1),
 		closed: make(chan struct{}),
 	}
+	// Create the semaphore to limit concurrency
+	f.sema = make(chan int, DefaultConcurrency)
+
+
 	// Start the one and only queue processing goroutine.
 	f.q.wg.Add(1)
 	go f.processQueue()
