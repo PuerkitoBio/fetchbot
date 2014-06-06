@@ -39,6 +39,8 @@ const (
 	// The default time-to-live of an idle host worker goroutine. If no URL is sent
 	// for a given host within this duration, this host's goroutine is disposed of.
 	DefaultWorkerIdleTTL = 30 * time.Second
+	// The default number of crawls which may proceed simultaneously
+	DefaultConcurrency = 100
 )
 
 // A Fetcher defines the parameters for running a web crawler.
@@ -78,6 +80,10 @@ type Fetcher struct {
 	// idleList keeps a sorted list of hosts in order of last access, so that removing idle
 	// workers is a quick and easy process.
 	idleList *list.List
+
+	// sema limits the number of host goroutines which may run at once.
+	Concurrency int
+	sema chan int
 }
 
 // The DebugInfo holds information to introspect the Fetcher's state.
@@ -101,6 +107,7 @@ func New(h Handler) *Fetcher {
 		UserAgent:     DefaultUserAgent,
 		WorkerIdleTTL: DefaultWorkerIdleTTL,
 		dbg:           make(chan *DebugInfo, 1),
+		Concurrency:   DefaultConcurrency,
 	}
 }
 
@@ -196,6 +203,10 @@ func (f *Fetcher) Start() *Queue {
 		ch:     make(chan Command, 1),
 		closed: make(chan struct{}),
 	}
+	// Create the semaphore to limit concurrency
+	f.sema = make(chan int, DefaultConcurrency)
+
+
 	// Start the one and only queue processing goroutine.
 	f.q.wg.Add(1)
 	go f.processQueue()
@@ -328,6 +339,10 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 		if wait != nil {
 			<-wait
 		}
+
+		// Wait for the semaphore
+		f.sema <- 1
+
 		switch r, ok := v.(robotCommand); {
 		case ok:
 			// This is the robots.txt request
@@ -347,6 +362,9 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 			f.visit(v, nil, ErrDisallowed)
 			wait = nil
 		}
+		// After crawling one page, drain one item from
+		// semaphore
+		<-f.sema
 	}
 	f.q.wg.Done()
 }
@@ -359,7 +377,7 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 		fmt.Fprintf(os.Stderr, "fetchbot: error fetching robots.txt: %s\n", err)
 		return nil
 	}
-	defer res.Body.Close()
+	defer bodyConnectionClose(res)
 	robData, err := robotstxt.FromResponse(res)
 	if err != nil {
 		// TODO : Ignore robots.txt parse error?
@@ -369,10 +387,17 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 	return robData.FindGroup(f.UserAgent)
 }
 
+func bodyConnectionClose(res *http.Response) {
+	if res != nil {
+		ioutil.ReadAll(res.Body)
+		res.Body.Close()
+	}
+}
+
 // Call the Handler for this Command. Closes the response's body.
 func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil {
-		defer res.Body.Close()
+		defer bodyConnectionClose(res)
 	}
 	f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
 }
@@ -424,6 +449,7 @@ func (f *Fetcher) doRequest(r Command) (*http.Response, error) {
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", f.UserAgent)
 	}
+
 	// Do the request.
 	res, err := f.HttpClient.Do(req)
 	if err != nil {
