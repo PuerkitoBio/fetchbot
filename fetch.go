@@ -213,61 +213,68 @@ func (f *Fetcher) Debug() <-chan *DebugInfo {
 // processQueue runs the queue in its own goroutine. This is the only goroutine
 // that should access the f.hosts, f.hostToIdleElem and f.idleList fields.
 func (f *Fetcher) processQueue() {
-loop:
-	for v := range f.q.ch {
-		if v == nil {
-			// Special case, when the Queue is closed, a nil command is sent, use this
-			// indicator to check for the closed signal, instead of looking on every loop.
-			select {
-			case <-f.q.closed:
-				// Close signal, exit loop
-				break loop
-			default:
-				// Keep going
-			}
-		}
-		u := v.URL()
-		if u.Host == "" {
-			// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
-			// goroutine must not block.
-			go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, ErrEmptyHost)
-			continue
-		}
-		// Check if a channel is already started for this host
-		in, ok := f.hosts[u.Host]
-		if !ok {
-			// Start a new channel and goroutine for this host.
+	timeout := time.Tick(time.Second)
 
-			// Must send the robots.txt request.
-			rob, err := u.Parse("/robots.txt")
-			if err != nil {
-				// Handle on a separate goroutine, the Queue goroutine must not block.
-				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
-				continue
-			}
-			// Create the infinite queue: the in channel to send on, and the out channel
-			// to read from in the host's goroutine, and add to the hosts map
-			var out chan Command
-			in, out = make(chan Command, 1), make(chan Command, 1)
-			f.hosts[u.Host] = in
-			f.q.wg.Add(1)
-			// Start the infinite queue goroutine for this host
-			go sliceIQ(in, out)
-			// Start the working goroutine for this host
-			go f.processChan(out)
-			// Enqueue the robots.txt request first.
-			in <- robotCommand{&Cmd{U: rob, M: "GET"}}
-		}
-		// Send the request
-		in <- v
-		// Adjust the timestamp for this host's idle TTL
-		f.setHostTimestamp(u.Host)
-		// Garbage collect idle hosts
-		f.freeIdleHosts()
-		// Send debug info, but do not block if full
+loop:
+	for {
 		select {
-		case f.dbg <- &DebugInfo{len(f.hosts)}:
-		default:
+		case v := <-f.q.ch:
+			if v == nil {
+				// Special case, when the Queue is closed, a nil command is sent, use this
+				// indicator to check for the closed signal, instead of looking on every loop.
+				select {
+				case <-f.q.closed:
+					// Close signal, exit loop
+					break loop
+				default:
+					// Keep going
+				}
+			}
+			u := v.URL()
+			if u.Host == "" {
+				// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
+				// goroutine must not block.
+				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, ErrEmptyHost)
+				break
+			}
+			// Check if a channel is already started for this host
+			in, ok := f.hosts[u.Host]
+			if !ok {
+				// Start a new channel and goroutine for this host.
+
+				// Must send the robots.txt request.
+				rob, err := u.Parse("/robots.txt")
+				if err != nil {
+					// Handle on a separate goroutine, the Queue goroutine must not block.
+					go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
+					break
+				}
+				// Create the infinite queue: the in channel to send on, and the out channel
+				// to read from in the host's goroutine, and add to the hosts map
+				var out chan Command
+				in, out = make(chan Command, 1), make(chan Command, 1)
+				f.hosts[u.Host] = in
+				f.q.wg.Add(1)
+				// Start the infinite queue goroutine for this host
+				go sliceIQ(in, out)
+				// Start the working goroutine for this host
+				go f.processChan(out)
+				// Enqueue the robots.txt request first.
+				in <- robotCommand{&Cmd{U: rob, M: "GET"}}
+			}
+			// Send the request
+			in <- v
+			// Adjust the timestamp for this host's idle TTL
+			f.setHostTimestamp(u.Host)
+			// Garbage collect idle hosts
+			f.freeIdleHosts()
+			// Send debug info, but do not block if full
+			select {
+			case f.dbg <- &DebugInfo{len(f.hosts)}:
+			default:
+			}
+		case <-timeout:
+			f.freeIdleHosts()
 		}
 	}
 	// Close all host channels now that it is impossible to send on those. Those are the `in`
