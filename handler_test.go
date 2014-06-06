@@ -103,7 +103,7 @@ Disallow: /deny
 	mux.Response().Path("/b").Handler(setTrace("p"))
 	mux.Response().Path("/ba").Handler(setTrace("q"))
 	mux.Response().Host(srv2Host).Path("/b").Handler(setTrace("z"))
-	f := New(mux)
+	f := New(mux, concurrentCrawls)
 	f.CrawlDelay = 0
 	for i, c := range cases {
 		parsed, err := url.Parse(c.url)
