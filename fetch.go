@@ -359,7 +359,9 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 		fmt.Fprintf(os.Stderr, "fetchbot: error fetching robots.txt: %s\n", err)
 		return nil
 	}
-	defer res.Body.Close()
+	if res.Body != nil {
+		defer res.Body.Close()
+	}
 	robData, err := robotstxt.FromResponse(res)
 	if err != nil {
 		// TODO : Ignore robots.txt parse error?
@@ -371,7 +373,7 @@ func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 
 // Call the Handler for this Command. Closes the response's body.
 func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
-	if res != nil {
+	if res != nil && res.Body != nil {
 		defer res.Body.Close()
 	}
 	f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
