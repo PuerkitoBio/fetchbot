@@ -62,7 +62,7 @@ type Fetcher struct {
 	// before it is stopped and cleared from memory.
 	WorkerIdleTTL time.Duration
 
-	// q holds the Queue to send data to the fetcher and optionnaly close (stop) it.
+	// q holds the Queue to send data to the fetcher and optionally close (stop) it.
 	q *Queue
 	// dbg is a channel used to push debug information.
 	dbg chan *DebugInfo
@@ -114,6 +114,8 @@ type Queue struct {
 
 // Close closes the Queue so that no more Commands can be sent. It blocks until
 // the Fetcher drains all pending commands. After the call, the Fetcher is stopped.
+// Attempts to enqueue new URLs after Close has been called will always result in
+// a ErrQueueClosed error.
 func (q *Queue) Close() error {
 	// Make sure it is not already closed, as this is a run-time panic
 	select {
@@ -133,7 +135,8 @@ func (q *Queue) Close() error {
 	}
 }
 
-// Block blocks the current goroutine until the Queue is closed.
+// Block blocks the current goroutine until the Queue is closed and all pending
+// commands are drained.
 func (q *Queue) Block() {
 	<-q.done
 }
