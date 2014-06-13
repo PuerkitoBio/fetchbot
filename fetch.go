@@ -344,7 +344,12 @@ func (f *Fetcher) processChan(ch <-chan Command) {
 			// Path allowed, process the request
 			res, err := f.doRequest(v)
 			f.visit(v, res, err)
-			wait = time.After(delay)
+			// No delay on error - the remote host was not reached
+			if err == nil {
+				wait = time.After(delay)
+			} else {
+				wait = nil
+			}
 		default:
 			// Path disallowed by robots.txt
 			f.visit(v, nil, ErrDisallowed)

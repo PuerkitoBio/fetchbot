@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,14 +17,13 @@ import (
 )
 
 var (
-	// Starting URL to crawl
-	seed = "http://golang.org"
-	// Duplicates table
-	dup = map[string]bool{seed: true}
 	// Protect access to dup
 	mu sync.Mutex
+	// Duplicates table
+	dup = map[string]bool{}
 
 	// Command-line flags
+	seed      = flag.String("seed", "http://golang.org", "seed URL")
 	stopAfter = flag.Duration("stopafter", 0, "automatically stop the fetchbot after a given time")
 	stopAtUrl = flag.String("stopat", "", "automatically stop the fetchbot at a given URL")
 	memStats  = flag.Duration("memstats", 0, "display memory statistics at a given interval")
@@ -30,6 +31,12 @@ var (
 
 func main() {
 	flag.Parse()
+
+	// Parse the provided seed
+	u, err := url.Parse(*seed)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Create the muxer
 	mux := fetchbot.NewMux()
@@ -55,7 +62,7 @@ func main() {
 
 	// Handle HEAD requests for html responses coming from the source host - we don't want
 	// to crawl links from other hosts.
-	mux.Response().Method("HEAD").Host("golang.org").ContentType("text/html").Handler(fetchbot.HandlerFunc(
+	mux.Response().Method("HEAD").Host(u.Host).ContentType("text/html").Handler(fetchbot.HandlerFunc(
 		func(ctx *fetchbot.Context, res *http.Response, err error) {
 			if _, err := ctx.Q.SendStringGet(ctx.Cmd.URL().String()); err != nil {
 				fmt.Printf("[ERR] %s %s - %s\n", ctx.Cmd.Method(), ctx.Cmd.URL(), err)
@@ -90,7 +97,8 @@ func main() {
 		}()
 	}
 	// Enqueue the seed, which is the first entry in the dup map
-	_, err := q.SendStringGet(seed)
+	dup[*seed] = true
+	_, err = q.SendStringGet(*seed)
 	if err != nil {
 		fmt.Printf("[ERR] GET %s - %s\n", seed, err)
 	}
