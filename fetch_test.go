@@ -542,6 +542,52 @@ func TestFreeIdleHost(t *testing.T) {
 	f.CrawlDelay = 0
 	f.WorkerIdleTTL = 100 * time.Millisecond
 	q := f.Start()
+	for i, c := range cases {
+		if i == 1 {
+			// srv1 should now be removed
+			f.mu.Lock()
+			if _, ok := f.hosts[srv1.URL[len("http://"):]]; ok {
+				t.Error("expected server srv1 to be removed from hosts")
+			}
+			f.mu.Unlock()
+		}
+		_, err := q.SendStringGet(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(101 * time.Millisecond)
+	}
+	q.Close()
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(cases...); !ok {
+		t.Error("expected handler to be called with all cases")
+	}
+	// Assert that there was no error
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+}
+
+func TestRemoveHosts(t *testing.T) {
+	// Start 2 test servers
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv1.Close()
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv2.Close()
+
+	// Define the raw URLs to enqueue
+	cases := []string{srv1.URL + "/a", srv2.URL + "/a"}
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh)
+	f.CrawlDelay = 0
+	f.WorkerIdleTTL = 100 * time.Millisecond
+	q := f.Start()
 	for _, c := range cases {
 		_, err := q.SendStringGet(c)
 		if err != nil {
@@ -558,13 +604,9 @@ func TestFreeIdleHost(t *testing.T) {
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
-	// Check that the srv1 host is removed
-	if _, ok := f.hosts[srv1.URL[len("http://"):]]; ok {
-		t.Error("expected host of srv1 to be removed, was still there")
-	}
-	// Check that the srv2 is still present
-	if _, ok := f.hosts[srv2.URL[len("http://"):]]; !ok {
-		t.Error("expected host of srv2 to be present, was absent")
+	// Assert that hosts are all removed
+	if l := len(f.hosts); l > 0 {
+		t.Errorf("expected hosts to be empty, got %d", l)
 	}
 }
 
@@ -580,8 +622,8 @@ func TestRestart(t *testing.T) {
 		f.Handler = sh
 		q := f.Start()
 		// Assert that the lists and maps are empty
-		if len(f.hosts) != 0 || len(f.hostToIdleElem) != 0 || f.idleList.Len() != 0 {
-			t.Errorf("run %d: expected clean slate after call to Start, found hosts=%d, hostToIdleElem=%d, idleList=%d", i, len(f.hosts), len(f.hostToIdleElem), f.idleList.Len())
+		if len(f.hosts) != 0 {
+			t.Errorf("run %d: expected clean slate after call to Start, found hosts=%d", i, len(f.hosts))
 		}
 		_, err := q.SendStringGet(cases...)
 		if err != nil {

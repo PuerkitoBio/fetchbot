@@ -5,7 +5,6 @@
 package fetchbot
 
 import (
-	"container/list"
 	"errors"
 	"fmt"
 	"io"
@@ -67,29 +66,15 @@ type Fetcher struct {
 	// dbg is a channel used to push debug information.
 	dbg chan *DebugInfo
 
-	// The next three maps and list are always accessed from the same single goroutine,
-	// (processQueue) so no sync is required.
-
-	// hosts maps the host names to its dedicated requests channel.
+	// hosts maps the host names to its dedicated requests channel, and mu protects
+	// concurrent access to the hosts field.
+	mu    sync.Mutex
 	hosts map[string]chan Command
-	// hostToIdleElem keeps an O(1) access from a host to its corresponding element in the
-	// idle list.
-	hostToIdleElem map[string]*list.Element
-	// idleList keeps a sorted list of hosts in order of last access, so that removing idle
-	// workers is a quick and easy process.
-	idleList *list.List
 }
 
 // The DebugInfo holds information to introspect the Fetcher's state.
 type DebugInfo struct {
 	NumHosts int
-}
-
-// The hostTimestamp holds the host and last access timestamp used to free idle
-// hosts' goroutines.
-type hostTimestamp struct {
-	host string
-	ts   time.Time
 }
 
 // New returns an initialized Fetcher.
@@ -190,23 +175,20 @@ func (q *Queue) sendWithMethod(method string, rawurl []string) (int, error) {
 	return len(rawurl), nil
 }
 
-// Start the Fetcher, and returns the Queue to use to send Commands to be fetched.
+// Start starts the Fetcher, and returns the Queue to use to send Commands to be fetched.
 func (f *Fetcher) Start() *Queue {
-	// Create the internal maps and lists
 	f.hosts = make(map[string]chan Command)
-	f.hostToIdleElem = make(map[string]*list.Element)
-	f.idleList = list.New()
-	// Create the Queue
+
 	f.q = &Queue{
 		ch:     make(chan Command, 1),
 		closed: make(chan struct{}),
 		done:   make(chan struct{}),
 	}
+
 	// Start the one and only queue processing goroutine.
 	f.q.wg.Add(1)
 	go f.processQueue()
-	// Return the Queue struct used to send more Commands and optionally close
-	// the queue and stop the fetcher.
+
 	return f.q
 }
 
@@ -216,8 +198,7 @@ func (f *Fetcher) Debug() <-chan *DebugInfo {
 	return f.dbg
 }
 
-// processQueue runs the queue in its own goroutine. This is the only goroutine
-// that should access the f.hosts, f.hostToIdleElem and f.idleList fields.
+// processQueue runs the queue in its own goroutine.
 func (f *Fetcher) processQueue() {
 loop:
 	for v := range f.q.ch {
@@ -232,6 +213,8 @@ loop:
 				// Keep going
 			}
 		}
+
+		// Get the URL to enqueue
 		u := v.URL()
 		if u.Host == "" {
 			// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
@@ -239,7 +222,9 @@ loop:
 			go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, ErrEmptyHost)
 			continue
 		}
+
 		// Check if a channel is already started for this host
+		f.mu.Lock()
 		in, ok := f.hosts[u.Host]
 		if !ok {
 			// Start a new channel and goroutine for this host.
@@ -247,118 +232,117 @@ loop:
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
 			if err != nil {
+				f.mu.Unlock()
 				// Handle on a separate goroutine, the Queue goroutine must not block.
 				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
 				continue
 			}
+
 			// Create the infinite queue: the in channel to send on, and the out channel
 			// to read from in the host's goroutine, and add to the hosts map
 			var out chan Command
 			in, out = make(chan Command, 1), make(chan Command, 1)
 			f.hosts[u.Host] = in
+			f.mu.Unlock()
 			f.q.wg.Add(1)
 			// Start the infinite queue goroutine for this host
 			go sliceIQ(in, out)
 			// Start the working goroutine for this host
-			go f.processChan(out)
+			go f.processChan(out, u.Host)
 			// Enqueue the robots.txt request first.
 			in <- robotCommand{&Cmd{U: rob, M: "GET"}}
+		} else {
+			f.mu.Unlock()
 		}
 		// Send the request
 		in <- v
-		// Adjust the timestamp for this host's idle TTL
-		f.setHostTimestamp(u.Host)
-		// Garbage collect idle hosts
-		f.freeIdleHosts()
+
 		// Send debug info, but do not block if full
 		select {
 		case f.dbg <- &DebugInfo{len(f.hosts)}:
 		default:
 		}
 	}
+
 	// Close all host channels now that it is impossible to send on those. Those are the `in`
 	// channels of the infinite queue. It will then drain any pending events, triggering the
 	// handlers for each in the worker goro, and then the infinite queue goro will terminate
 	// and close the `out` channel, which in turn will terminate the worker goro.
+	f.mu.Lock()
 	for _, ch := range f.hosts {
 		close(ch)
 	}
+	f.hosts = make(map[string]chan Command)
+	f.mu.Unlock()
+
 	f.q.wg.Done()
 }
 
-// Add the host to the idle list, along with its last access timestamp. The idle
-// list is maintained in sorted order so that the LRU host is first.
-func (f *Fetcher) setHostTimestamp(host string) {
-	if e, ok := f.hostToIdleElem[host]; !ok {
-		e = f.idleList.PushBack(&hostTimestamp{host, time.Now()})
-		f.hostToIdleElem[host] = e
-	} else {
-		e.Value.(*hostTimestamp).ts = time.Now()
-		f.idleList.MoveToBack(e)
-	}
-}
-
-// Free the hosts that have been idle for at least Fetcher.WorkerIdleTTL.
-func (f *Fetcher) freeIdleHosts() {
-	for e := f.idleList.Front(); e != nil; {
-		hostts := e.Value.(*hostTimestamp)
-		if time.Now().Sub(hostts.ts) > f.WorkerIdleTTL {
-			ch := f.hosts[hostts.host]
-			// Remove and close this host's channel
-			delete(f.hosts, hostts.host)
-			close(ch)
-			// Remove from idle list
-			delete(f.hostToIdleElem, hostts.host)
-			newe := e.Next()
-			f.idleList.Remove(e)
-			// Continue with next element, there may be more to free
-			e = newe
-		} else {
-			// The list is ordered by oldest first, so as soon as one host is not passed
-			// its TTL, we can safely exit the loop.
-			break
-		}
-	}
-}
-
 // Goroutine for a host's worker, processing requests for all its URLs.
-func (f *Fetcher) processChan(ch <-chan Command) {
+func (f *Fetcher) processChan(ch <-chan Command, hostKey string) {
 	var (
 		agent *robotstxt.Group
 		wait  <-chan time.Time
+		ttl   <-chan time.Time
 		delay = f.CrawlDelay
 	)
 
-	for v := range ch {
-		// Wait for the prescribed delay
-		if wait != nil {
-			<-wait
-		}
-		switch r, ok := v.(robotCommand); {
-		case ok:
-			// This is the robots.txt request
-			agent = f.getRobotAgent(r)
-			// Initialize the crawl delay
-			if agent != nil && agent.CrawlDelay > 0 {
-				delay = agent.CrawlDelay
+loop:
+	for {
+		select {
+		case v, ok := <-ch:
+			if !ok {
+				// Terminate this goroutine, channel is closed
+				break loop
 			}
-			wait = time.After(delay)
-		case agent == nil || agent.Test(v.URL().Path):
-			// Path allowed, process the request
-			res, err := f.doRequest(v)
-			f.visit(v, res, err)
-			// No delay on error - the remote host was not reached
-			if err == nil {
+
+			// Wait for the prescribed delay
+			if wait != nil {
+				<-wait
+			}
+
+			switch r, ok := v.(robotCommand); {
+			case ok:
+				// This is the robots.txt request
+				agent = f.getRobotAgent(r)
+				// Initialize the crawl delay
+				if agent != nil && agent.CrawlDelay > 0 {
+					delay = agent.CrawlDelay
+				}
 				wait = time.After(delay)
-			} else {
+
+			case agent == nil || agent.Test(v.URL().Path):
+				// Path allowed, process the request
+				res, err := f.doRequest(v)
+				f.visit(v, res, err)
+				// No delay on error - the remote host was not reached
+				if err == nil {
+					wait = time.After(delay)
+				} else {
+					wait = nil
+				}
+
+			default:
+				// Path disallowed by robots.txt
+				f.visit(v, nil, ErrDisallowed)
 				wait = nil
 			}
-		default:
-			// Path disallowed by robots.txt
-			f.visit(v, nil, ErrDisallowed)
-			wait = nil
+			// Every time a command is received, reset the ttl channel
+			ttl = time.After(f.WorkerIdleTTL)
+
+		case <-ttl:
+			// Worker has been idle for WorkerIdleTTL, terminate it
+			f.mu.Lock()
+			inch, ok := f.hosts[hostKey]
+			delete(f.hosts, hostKey)
+			f.mu.Unlock()
+			if ok {
+				close(inch)
+			}
+			break loop
 		}
 	}
+
 	f.q.wg.Done()
 }
 
