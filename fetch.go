@@ -107,9 +107,9 @@ func New(h Handler) *Fetcher {
 // Queue offers methods to send Commands to the Fetcher, and to Stop the crawling process.
 // It is safe to use from concurrent goroutines.
 type Queue struct {
-	ch     chan Command
-	closed chan struct{}
-	wg     sync.WaitGroup
+	ch           chan Command
+	closed, done chan struct{}
+	wg           sync.WaitGroup
 }
 
 // Close closes the Queue so that no more Commands can be sent. It blocks until
@@ -127,13 +127,15 @@ func (q *Queue) Close() error {
 		q.ch <- nil
 		// Wait for the Fetcher to drain.
 		q.wg.Wait()
+		// Unblock any callers waiting on q.Block
+		close(q.done)
 		return nil
 	}
 }
 
 // Block blocks the current goroutine until the Queue is closed.
 func (q *Queue) Block() {
-	<-q.closed
+	<-q.done
 }
 
 // Send enqueues a Command into the Fetcher. If the Queue has been closed, it
@@ -195,6 +197,7 @@ func (f *Fetcher) Start() *Queue {
 	f.q = &Queue{
 		ch:     make(chan Command, 1),
 		closed: make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	// Start the one and only queue processing goroutine.
 	f.q.wg.Add(1)

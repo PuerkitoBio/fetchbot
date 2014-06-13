@@ -174,7 +174,7 @@ func TestBlock(t *testing.T) {
 	defer srv.Close()
 
 	// Define the raw URLs to enqueue
-	cases := []string{srv.URL + "/a", srv.URL + "/b"}
+	cases := []string{srv.URL + "/a", srv.URL + "/b", srv.URL + "/c"}
 
 	// Start the Fetcher
 	sh := &spyHandler{}
