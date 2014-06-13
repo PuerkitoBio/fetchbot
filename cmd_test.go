@@ -206,10 +206,15 @@ func (hc *headerCmd) Header() http.Header {
 
 func TestHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for k, v := range req.Header {
+		// Write headers in lexical order so that result is predictable
+		keys := make([]string, 0, len(req.Header))
+		for k := range req.Header {
 			if len(k) == 1 {
-				w.Write([]byte(fmt.Sprintf("%s:%s\n", k, v[0])))
+				keys = append(keys, k)
 			}
+		}
+		for _, k := range keys {
+			w.Write([]byte(fmt.Sprintf("%s:%s\n", k, req.Header[k][0])))
 		}
 	}))
 	defer srv.Close()
