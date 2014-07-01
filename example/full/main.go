@@ -25,7 +25,7 @@ var (
 	// Command-line flags
 	seed      = flag.String("seed", "http://golang.org", "seed URL")
 	stopAfter = flag.Duration("stopafter", 0, "automatically stop the fetchbot after a given time")
-	stopAtUrl = flag.String("stopat", "", "automatically stop the fetchbot at a given URL")
+	stopAtURL = flag.String("stopat", "", "automatically stop the fetchbot at a given URL")
 	memStats  = flag.Duration("memstats", 0, "display memory statistics at a given interval")
 )
 
@@ -71,8 +71,8 @@ func main() {
 
 	// Create the Fetcher, handle the logging first, then dispatch to the Muxer
 	h := logHandler(mux)
-	if *stopAtUrl != "" {
-		h = stopHandler(*stopAtUrl, logHandler(mux))
+	if *stopAtURL != "" {
+		h = stopHandler(*stopAtURL, logHandler(mux))
 	}
 	f := fetchbot.New(h)
 	// First mem stat print must be right after creating the fetchbot
