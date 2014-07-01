@@ -20,23 +20,28 @@ import (
 )
 
 var (
-	// A Command cannot be enqueued if it has an URL with an empty host.
+	// ErrEmptyHost is returned if a command to be enqueued has an URL with an empty host.
 	ErrEmptyHost = errors.New("fetchbot: invalid empty host")
 
-	// Error when the requested URL is disallowed by the robots.txt policy.
+	// ErrDisallowed is returned when the requested URL is disallowed by the robots.txt
+	// policy.
 	ErrDisallowed = errors.New("fetchbot: disallowed by robots.txt")
 
-	// Error when a Send call is made on a closed Queue.
+	// ErrQueueClosed is returned when a Send call is made on a closed Queue.
 	ErrQueueClosed = errors.New("fetchbot: send on a closed queue")
 )
 
 const (
-	// The default crawl delay to use if there is no robots.txt specified delay.
+	// DefaultCrawlDelay represents the delay to use if there is no robots.txt
+	// specified delay.
 	DefaultCrawlDelay = 5 * time.Second
-	// The default user agent string.
+
+	// DefaultUserAgent is the default user agent string.
 	DefaultUserAgent = "Fetchbot (https://github.com/PuerkitoBio/fetchbot)"
-	// The default time-to-live of an idle host worker goroutine. If no URL is sent
-	// for a given host within this duration, this host's goroutine is disposed of.
+
+	// DefaultWorkerIdleTTL is the default time-to-live of an idle host worker goroutine.
+	// If no URL is sent for a given host within this duration, this host's goroutine
+	// is disposed of.
 	DefaultWorkerIdleTTL = 30 * time.Second
 )
 
@@ -51,7 +56,8 @@ type Fetcher struct {
 	CrawlDelay time.Duration
 
 	// The *http.Client to use for the requests. If nil, defaults to the net/http
-	// package's default client.
+	// package's default client. Should be HTTPClient to comply with go lint, but
+	// this is a breaking change, won't fix.
 	HttpClient *http.Client
 
 	// The user-agent string to use for robots.txt validation and URL fetching.

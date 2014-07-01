@@ -100,7 +100,7 @@ func main() {
 	dup[*seed] = true
 	_, err = q.SendStringGet(*seed)
 	if err != nil {
-		fmt.Printf("[ERR] GET %s - %s\n", seed, err)
+		fmt.Printf("[ERR] GET %s - %s\n", *seed, err)
 	}
 	q.Block()
 }

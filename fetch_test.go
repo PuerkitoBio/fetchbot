@@ -135,7 +135,7 @@ func (sh *spyHandler) CalledWithExactly(rawurl ...string) bool {
 	return true
 }
 
-var nopHandler Handler = HandlerFunc(func(ctx *Context, res *http.Response, err error) {})
+var nopHandler = HandlerFunc(func(ctx *Context, res *http.Response, err error) {})
 
 // Test that an initialized Fetcher has the right defaults.
 func TestNew(t *testing.T) {

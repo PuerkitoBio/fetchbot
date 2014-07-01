@@ -160,9 +160,8 @@ func (r *ResponseMatcher) match(res *http.Response) (bool, int) {
 	if r.path != "" {
 		if strings.HasPrefix(res.Request.URL.Path, r.path) {
 			return true, len(r.path)
-		} else {
-			return false, 0
 		}
+		return false, 0
 	}
 	return true, 0
 }
