@@ -555,7 +555,7 @@ func TestFreeIdleHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(101 * time.Millisecond)
+		time.Sleep(110 * time.Millisecond)
 	}
 	q.Close()
 	// Assert that the handler got called with the right values

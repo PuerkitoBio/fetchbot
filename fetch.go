@@ -67,10 +67,17 @@ type Fetcher struct {
 	// before it is stopped and cleared from memory.
 	WorkerIdleTTL time.Duration
 
+	// AutoClose makes the fetcher close its queue automatically once the number
+	// of hosts reach 0. A host is removed once it has been idle for WorkerIdleTTL
+	// duration.
+	AutoClose bool
+
 	// q holds the Queue to send data to the fetcher and optionally close (stop) it.
 	q *Queue
 	// dbg is a channel used to push debug information.
-	dbg chan *DebugInfo
+	dbgmu     sync.Mutex
+	dbg       chan *DebugInfo
+	debugging bool
 
 	// hosts maps the host names to its dedicated requests channel, and mu protects
 	// concurrent access to the hosts field.
@@ -201,6 +208,9 @@ func (f *Fetcher) Start() *Queue {
 // Debug returns the channel to use to receive the debugging information. It is not intended
 // to be used by package users.
 func (f *Fetcher) Debug() <-chan *DebugInfo {
+	f.dbgmu.Lock()
+	defer f.dbgmu.Unlock()
+	f.debugging = true
 	return f.dbg
 }
 
@@ -264,10 +274,16 @@ loop:
 		in <- v
 
 		// Send debug info, but do not block if full
-		select {
-		case f.dbg <- &DebugInfo{len(f.hosts)}:
-		default:
+		f.dbgmu.Lock()
+		if f.debugging {
+			f.mu.Lock()
+			select {
+			case f.dbg <- &DebugInfo{len(f.hosts)}:
+			default:
+			}
+			f.mu.Unlock()
 		}
+		f.dbgmu.Unlock()
 	}
 
 	// Close all host channels now that it is impossible to send on those. Those are the `in`
@@ -341,6 +357,11 @@ loop:
 			f.mu.Lock()
 			inch, ok := f.hosts[hostKey]
 			delete(f.hosts, hostKey)
+
+			// Close the queue if AutoClose is set and there are no more hosts.
+			if f.AutoClose && len(f.hosts) == 0 {
+				go f.q.Close()
+			}
 			f.mu.Unlock()
 			if ok {
 				close(inch)
