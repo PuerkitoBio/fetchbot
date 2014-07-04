@@ -45,6 +45,12 @@ const (
 	DefaultWorkerIdleTTL = 30 * time.Second
 )
 
+// Doer defines the method required to use a type as HttpClient.
+// The net/*http.Client type satisfies this interface.
+type Doer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 // A Fetcher defines the parameters for running a web crawler.
 type Fetcher struct {
 	// The Handler to be called for each request. All successfully enqueued requests
@@ -58,7 +64,7 @@ type Fetcher struct {
 	// The *http.Client to use for the requests. If nil, defaults to the net/http
 	// package's default client. Should be HTTPClient to comply with go lint, but
 	// this is a breaking change, won't fix.
-	HttpClient *http.Client
+	HttpClient Doer
 
 	// The user-agent string to use for robots.txt validation and URL fetching.
 	UserAgent string

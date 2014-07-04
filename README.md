@@ -19,6 +19,10 @@ The package has a single external dependency, [robotstxt](https://github.com/tem
 
 The [API documentation is available on godoc.org](http://godoc.org/github.com/PuerkitoBio/fetchbot).
 
+## Changes
+
+* 2014-07-04 : change the type of Fetcher.HttpClient from `*http.Client` to the `Doer` interface. Low chance of breaking existing code, but it's a possibility if someone used the fetcher's client to run other requests (e.g. `f.HttpClient.Get(...)`).
+
 ## Usage
 
 The following example (taken from /example/short/main.go) shows how to create and

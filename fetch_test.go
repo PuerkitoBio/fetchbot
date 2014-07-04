@@ -144,7 +144,7 @@ func TestNew(t *testing.T) {
 		t.Errorf("expected CrawlDelay to be %s, got %s", DefaultCrawlDelay, f.CrawlDelay)
 	}
 	if f.HttpClient != http.DefaultClient {
-		t.Errorf("expected HttpClient to be %p (default net/http client), got %p", http.DefaultClient, f.HttpClient)
+		t.Errorf("expected HttpClient to be %v (default net/http client), got %v", http.DefaultClient, f.HttpClient)
 	}
 	if f.UserAgent != DefaultUserAgent {
 		t.Errorf("expected UserAgent to be %s, got %s", DefaultUserAgent, f.UserAgent)
