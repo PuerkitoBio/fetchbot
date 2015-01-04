@@ -307,7 +307,7 @@ loop:
 }
 
 // Goroutine for a host's worker, processing requests for all its URLs.
-func (f *Fetcher) processChan(ch <-chan Command, hostKey string) {
+func (f *Fetcher) processChan(ch <-chan Command, hostname string) {
 	var (
 		agent *robotstxt.Group
 		wait  <-chan time.Time
@@ -361,8 +361,8 @@ loop:
 		case <-ttl:
 			// Worker has been idle for WorkerIdleTTL, terminate it
 			f.mu.Lock()
-			inch, ok := f.hosts[hostKey]
-			delete(f.hosts, hostKey)
+			inch, ok := f.hosts[hostname]
+			delete(f.hosts, hostname)
 
 			// Close the queue if AutoClose is set and there are no more hosts.
 			if f.AutoClose && len(f.hosts) == 0 {
