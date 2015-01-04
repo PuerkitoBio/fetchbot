@@ -361,7 +361,7 @@ loop:
 		case <-ttl:
 			// Worker has been idle for WorkerIdleTTL, terminate it
 			f.mu.Lock()
-			inch, ok := f.hosts[hostKey]
+			in_channel, ok := f.hosts[hostKey]
 			delete(f.hosts, hostKey)
 
 			// Close the queue if AutoClose is set and there are no more hosts.
@@ -370,7 +370,7 @@ loop:
 			}
 			f.mu.Unlock()
 			if ok {
-				close(inch)
+				close(in_channel)
 			}
 			break loop
 		}
