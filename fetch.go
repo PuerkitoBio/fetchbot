@@ -32,6 +32,10 @@ var (
 )
 
 const (
+	// DefaultCrawlPoliteness states that the crawling process is polite by default,
+	// meaning that robots.txt policies are respected if present.
+	DefaultCrawlPoliteness = true
+
 	// DefaultCrawlDelay represents the delay to use if there is no robots.txt
 	// specified delay.
 	DefaultCrawlDelay = 5 * time.Second
@@ -56,6 +60,10 @@ type Fetcher struct {
 	// The Handler to be called for each request. All successfully enqueued requests
 	// produce a Handler call.
 	Handler Handler
+
+	// CrawlPoliteness makes the fetcher respect the robots.txt policies of hosts by
+	// requesting and parsing it before any other request to the same host.
+	CrawlPoliteness bool
 
 	// Default delay to use between requests to a same host if there is no robots.txt
 	// crawl delay.
@@ -99,12 +107,13 @@ type DebugInfo struct {
 // New returns an initialized Fetcher.
 func New(h Handler) *Fetcher {
 	return &Fetcher{
-		Handler:       h,
-		CrawlDelay:    DefaultCrawlDelay,
-		HttpClient:    http.DefaultClient,
-		UserAgent:     DefaultUserAgent,
-		WorkerIdleTTL: DefaultWorkerIdleTTL,
-		dbg:           make(chan *DebugInfo, 1),
+		Handler:         h,
+		CrawlPoliteness: DefaultCrawlPoliteness,
+		CrawlDelay:      DefaultCrawlDelay,
+		HttpClient:      http.DefaultClient,
+		UserAgent:       DefaultUserAgent,
+		WorkerIdleTTL:   DefaultWorkerIdleTTL,
+		dbg:             make(chan *DebugInfo, 1),
 	}
 }
 
@@ -253,7 +262,7 @@ loop:
 
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
-			if err != nil {
+			if err != nil && f.CrawlPoliteness {
 				f.mu.Unlock()
 				// Handle on a separate goroutine, the Queue goroutine must not block.
 				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
@@ -271,8 +280,11 @@ loop:
 			go sliceIQ(in, out)
 			// Start the working goroutine for this host
 			go f.processChan(out, u.Host)
-			// Enqueue the robots.txt request first.
-			in <- robotCommand{&Cmd{U: rob, M: "GET"}}
+
+			if f.CrawlPoliteness {
+				// Enqueue the robots.txt request first.
+				in <- robotCommand{&Cmd{U: rob, M: "GET"}}
+			}
 		} else {
 			f.mu.Unlock()
 		}
