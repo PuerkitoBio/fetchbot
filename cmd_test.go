@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,7 @@ func TestHeader(t *testing.T) {
 				keys = append(keys, k)
 			}
 		}
+		sort.Strings(keys)
 		for _, k := range keys {
 			w.Write([]byte(fmt.Sprintf("%s:%s\n", k, req.Header[k][0])))
 		}
