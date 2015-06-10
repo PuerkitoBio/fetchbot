@@ -57,11 +57,12 @@ type Fetcher struct {
 	// produce a Handler call.
 	Handler Handler
 
-	// DisablePoliteness makes the fetcher not to respect the robots.txt policies of hosts.
+	// DisablePoliteness disables fetching and using the robots.txt policies of
+	// hosts.
 	DisablePoliteness bool
 
 	// Default delay to use between requests to a same host if there is no robots.txt
-	// crawl delay.
+	// crawl delay or if DisablePoliteness is true.
 	CrawlDelay time.Duration
 
 	// The *http.Client to use for the requests. If nil, defaults to the net/http
@@ -254,13 +255,18 @@ loop:
 		if !ok {
 			// Start a new channel and goroutine for this host.
 
-			// Must send the robots.txt request.
-			rob, err := u.Parse("/robots.txt")
-			if err != nil && !f.DisablePoliteness {
-				f.mu.Unlock()
-				// Handle on a separate goroutine, the Queue goroutine must not block.
-				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
-				continue
+			var rob *url.URL
+			var err error
+
+			if !f.DisablePoliteness {
+				// Must send the robots.txt request.
+				rob, err = u.Parse("/robots.txt")
+				if err != nil {
+					f.mu.Unlock()
+					// Handle on a separate goroutine, the Queue goroutine must not block.
+					go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
+					continue
+				}
 			}
 
 			// Create the infinite queue: the in channel to send on, and the out channel

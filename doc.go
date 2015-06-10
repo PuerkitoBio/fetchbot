@@ -120,6 +120,9 @@ new commands to fetch. If the idle time-to-live is reached, the worker goroutine
 is stopped and its resources are released. This can be especially useful for
 long-running crawlers.
 
+- DisablePoliteness : If true, disables fetching of robots.txt, effectively
+forcing the use of the CrawlDelay value between calls to a host.
+
 What fetchbot doesn't do - especially compared to gocrawl - is that it doesn't
 keep track of already visited URLs, and it doesn't normalize the URLs. This is outside
 the scope of this package - all commands sent on the Queue will be fetched.

@@ -21,6 +21,7 @@ The [API documentation is available on godoc.org](http://godoc.org/github.com/Pu
 
 ## Changes
 
+* 2015-06-10 : add `DisablePoliteness` field on the `Fetcher` to optionally bypass robots.txt checks (thanks to [@oli-g][oli]).
 * 2014-07-04 : change the type of Fetcher.HttpClient from `*http.Client` to the `Doer` interface. Low chance of breaking existing code, but it's a possibility if someone used the fetcher's client to run other requests (e.g. `f.HttpClient.Get(...)`).
 
 ## Usage
@@ -132,3 +133,5 @@ but for an example, see /example/full/main.go.
 The [BSD 3-Clause license](http://opensource.org/licenses/BSD-3-Clause), the same as
 the Go language. The iq package source code is under the CDDL-1.0 license (details in
 the source file).
+
+[oli]: https://github.com/oli-g
