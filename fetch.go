@@ -32,10 +32,6 @@ var (
 )
 
 const (
-	// DefaultCrawlPoliteness states that the crawling process is polite by default,
-	// meaning that robots.txt policies are respected if present.
-	DefaultCrawlPoliteness = true
-
 	// DefaultCrawlDelay represents the delay to use if there is no robots.txt
 	// specified delay.
 	DefaultCrawlDelay = 5 * time.Second
@@ -61,9 +57,8 @@ type Fetcher struct {
 	// produce a Handler call.
 	Handler Handler
 
-	// CrawlPoliteness makes the fetcher respect the robots.txt policies of hosts by
-	// requesting and parsing it before any other request to the same host.
-	CrawlPoliteness bool
+	// DisablePoliteness makes the fetcher not to respect the robots.txt policies of hosts.
+	DisablePoliteness bool
 
 	// Default delay to use between requests to a same host if there is no robots.txt
 	// crawl delay.
@@ -107,13 +102,12 @@ type DebugInfo struct {
 // New returns an initialized Fetcher.
 func New(h Handler) *Fetcher {
 	return &Fetcher{
-		Handler:         h,
-		CrawlPoliteness: DefaultCrawlPoliteness,
-		CrawlDelay:      DefaultCrawlDelay,
-		HttpClient:      http.DefaultClient,
-		UserAgent:       DefaultUserAgent,
-		WorkerIdleTTL:   DefaultWorkerIdleTTL,
-		dbg:             make(chan *DebugInfo, 1),
+		Handler:       h,
+		CrawlDelay:    DefaultCrawlDelay,
+		HttpClient:    http.DefaultClient,
+		UserAgent:     DefaultUserAgent,
+		WorkerIdleTTL: DefaultWorkerIdleTTL,
+		dbg:           make(chan *DebugInfo, 1),
 	}
 }
 
@@ -262,7 +256,7 @@ loop:
 
 			// Must send the robots.txt request.
 			rob, err := u.Parse("/robots.txt")
-			if err != nil && f.CrawlPoliteness {
+			if err != nil && !f.DisablePoliteness {
 				f.mu.Unlock()
 				// Handle on a separate goroutine, the Queue goroutine must not block.
 				go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
@@ -281,7 +275,7 @@ loop:
 			// Start the working goroutine for this host
 			go f.processChan(out, u.Host)
 
-			if f.CrawlPoliteness {
+			if !f.DisablePoliteness {
 				// Enqueue the robots.txt request first.
 				in <- robotCommand{&Cmd{U: rob, M: "GET"}}
 			}
