@@ -224,7 +224,7 @@ func (r *ResponseMatcher) StatusRange(min, max int) *ResponseMatcher {
 	return r
 }
 
-// Scheme sets a criteria based on the host of the URL for the Response Handler. Its Handler
+// Scheme sets a criteria based on the scheme of the URL for the Response Handler. Its Handler
 // will only be called if the scheme of the URL matches exactly the specified scheme.
 func (r *ResponseMatcher) Scheme(scheme string) *ResponseMatcher {
 	r.mux.mu.Lock()
