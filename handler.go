@@ -128,8 +128,9 @@ type ResponseMatcher struct {
 	contentType string
 	minStatus   int
 	maxStatus   int
-	path        string
+	scheme      string
 	host        string
+	path        string
 	h           Handler
 	mux         *Mux
 }
@@ -149,6 +150,11 @@ func (r *ResponseMatcher) match(res *http.Response) (bool, int) {
 	}
 	if r.minStatus != 0 || r.maxStatus != 0 {
 		if res.StatusCode < r.minStatus || res.StatusCode > r.maxStatus {
+			return false, 0
+		}
+	}
+	if r.scheme != "" {
+		if res.Request.URL.Scheme != r.scheme {
 			return false, 0
 		}
 	}
@@ -218,13 +224,12 @@ func (r *ResponseMatcher) StatusRange(min, max int) *ResponseMatcher {
 	return r
 }
 
-// Path sets a criteria based on the path of the URL for the Response Handler. Its Handler
-// will only be called if the path of the URL starts with this path. Longer matches
-// have priority over shorter ones.
-func (r *ResponseMatcher) Path(p string) *ResponseMatcher {
+// Scheme sets a criteria based on the host of the URL for the Response Handler. Its Handler
+// will only be called if the scheme of the URL matches exactly the specified scheme.
+func (r *ResponseMatcher) Scheme(scheme string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
-	r.path = p
+	r.scheme = scheme
 	return r
 }
 
@@ -234,6 +239,16 @@ func (r *ResponseMatcher) Host(host string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.host = host
+	return r
+}
+
+// Path sets a criteria based on the path of the URL for the Response Handler. Its Handler
+// will only be called if the path of the URL starts with this path. Longer matches
+// have priority over shorter ones.
+func (r *ResponseMatcher) Path(p string) *ResponseMatcher {
+	r.mux.mu.Lock()
+	defer r.mux.mu.Unlock()
+	r.path = p
 	return r
 }
 
