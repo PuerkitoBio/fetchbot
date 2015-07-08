@@ -115,9 +115,12 @@ func New(h Handler) *Fetcher {
 // Queue offers methods to send Commands to the Fetcher, and to Stop the crawling process.
 // It is safe to use from concurrent goroutines.
 type Queue struct {
-	ch           chan Command
-	closed, done chan struct{}
-	wg           sync.WaitGroup
+	ch chan Command
+
+	// signal channels
+	closed, cancelled, done chan struct{}
+
+	wg sync.WaitGroup
 }
 
 // Close closes the Queue so that no more Commands can be sent. It blocks until
@@ -147,6 +150,22 @@ func (q *Queue) Close() error {
 // commands are drained.
 func (q *Queue) Block() {
 	<-q.done
+}
+
+// Cancel closes the Queue and drains the pending commands without processing
+// them, allowing for a fast "stop immediately"-ish operation.
+func (q *Queue) Cancel() error {
+	select {
+	case <-q.cancelled:
+		// already cancelled, no-op
+		return nil
+	default:
+		// mark the queue as cancelled
+		close(q.cancelled)
+		// Close the Queue, that will wait for pending commands to drain
+		// will unblock any callers waiting on q.Block
+		return q.Close()
+	}
 }
 
 // Send enqueues a Command into the Fetcher. If the Queue has been closed, it
@@ -238,6 +257,13 @@ loop:
 			default:
 				// Keep going
 			}
+		}
+		select {
+		case <-f.q.cancelled:
+			// queue got cancelled, drain
+			continue
+		default:
+			// go on
 		}
 
 		// Get the URL to enqueue
