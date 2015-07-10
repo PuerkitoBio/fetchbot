@@ -222,9 +222,10 @@ func (f *Fetcher) Start() *Queue {
 	f.hosts = make(map[string]chan Command)
 
 	f.q = &Queue{
-		ch:     make(chan Command, 1),
-		closed: make(chan struct{}),
-		done:   make(chan struct{}),
+		ch:        make(chan Command, 1),
+		closed:    make(chan struct{}),
+		cancelled: make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 
 	// Start the one and only queue processing goroutine.
