@@ -131,6 +131,7 @@ type ResponseMatcher struct {
 	scheme      string
 	host        string
 	path        string
+	predicate   func(*http.Response) bool
 	h           Handler
 	mux         *Mux
 }
@@ -160,6 +161,11 @@ func (r *ResponseMatcher) match(res *http.Response) (bool, int) {
 	}
 	if r.host != "" {
 		if res.Request.URL.Host != r.host {
+			return false, 0
+		}
+	}
+	if r.predicate != nil {
+		if !r.predicate(res) {
 			return false, 0
 		}
 	}
@@ -249,6 +255,16 @@ func (r *ResponseMatcher) Path(p string) *ResponseMatcher {
 	r.mux.mu.Lock()
 	defer r.mux.mu.Unlock()
 	r.path = p
+	return r
+}
+
+// Custom sets a criteria based on a function that receives the HTTP response
+// and returns true if the matcher should be used to handle this response,
+// false otherwise.
+func (r *ResponseMatcher) Custom(predicate func(*http.Response) bool) *ResponseMatcher {
+	r.mux.mu.Lock()
+	defer r.mux.mu.Unlock()
+	r.predicate = predicate
 	return r
 }
 
