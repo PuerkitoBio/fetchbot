@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -350,6 +351,51 @@ func TestFullCmd(t *testing.T) {
 	if b := sh.BodyFor(cmd.URL().String()); b != exp {
 		t.Errorf("expected body '%s', got '%s'", exp, b)
 	}
+}
+
+func TestHandlerCmd(t *testing.T) {
+	var result int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {}))
+	defer srv.Close()
+
+	cases := []struct {
+		cmd  Command
+		want int32
+	}{
+		0: {
+			mustCmd(NewHandlerCmd("GET", srv.URL+"/a", func(ctx *Context, res *http.Response, err error) {
+				atomic.AddInt32(&result, 1)
+			})), 1,
+		},
+		1: {
+			&Cmd{U: mustParse(t, srv.URL+"/b"), M: "GET"}, -1,
+		},
+	}
+
+	f := New(HandlerFunc(func(ctx *Context, res *http.Response, err error) {
+		atomic.AddInt32(&result, -1)
+	}))
+	f.CrawlDelay = 0
+
+	for i, c := range cases {
+		result = 0
+		q := f.Start()
+		if err := q.Send(c.cmd); err != nil {
+			t.Errorf("%d: error sending command: %s", i, err)
+		}
+		q.Close()
+
+		if result != c.want {
+			t.Errorf("%d: want %d, got %d", i, c.want, result)
+		}
+	}
+}
+
+func mustCmd(cmd Command, err error) Command {
+	if err != nil {
+		panic(err)
+	}
+	return cmd
 }
 
 func mustParse(t *testing.T, raw string) *url.URL {
