@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -648,6 +649,7 @@ func TestOverflowBuffer(t *testing.T) {
 	}))
 	defer srv.Close()
 	cases := []string{srv.URL + "/a", srv.URL + "/b", srv.URL + "/c", srv.URL + "/d", srv.URL + "/e", srv.URL + "/f"}
+	signal := make(chan struct{})
 	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
 		if ctx.Cmd.URL().Path == "/a" {
 			// Enqueue a bunch, while this host's goroutine is busy waiting for this call
@@ -655,6 +657,7 @@ func TestOverflowBuffer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			close(signal)
 		}
 	})}
 	f := New(sh)
@@ -664,11 +667,53 @@ func TestOverflowBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	<-signal
 	q.Close()
 	// Assert that the handler got called with the right values
 	if ok := sh.CalledWithExactly(cases...); !ok {
 		t.Error("expected handler to be called with all cases")
+	}
+	// Assert that there was no error
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+}
+
+func TestCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	allowHandler := make(chan struct{})
+	allowCancel := make(chan struct{})
+	sh := &spyHandler{fn: HandlerFunc(func(ctx *Context, res *http.Response, err error) {
+		// allow cancel as soon as /0 is received
+		<-allowHandler
+		if res.Request.URL.Path == "/0" {
+			close(allowCancel)
+		}
+	})}
+
+	f := New(sh)
+	f.CrawlDelay = time.Second
+	f.DisablePoliteness = true
+	q := f.Start()
+	// enqueue a bunch of URLs
+	for i := 0; i < 1000; i++ {
+		_, err := q.SendStringGet(srv.URL + "/" + strconv.Itoa(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// allow one to proceed
+	close(allowHandler)
+	// wait for cancel signal
+	<-allowCancel
+	q.Cancel()
+
+	// Assert that the handler got called with the right values
+	if ok := sh.CalledWithExactly(srv.URL + "/0"); !ok {
+		t.Error("expected handler to be called only with /0")
 	}
 	// Assert that there was no error
 	if cnt := sh.Errors(); cnt > 0 {

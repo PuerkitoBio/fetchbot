@@ -357,6 +357,8 @@ func (f *Fetcher) processChan(ch <-chan Command, hostKey string) {
 loop:
 	for {
 		select {
+		case <-f.q.cancelled:
+			break loop
 		case v, ok := <-ch:
 			if !ok {
 				// Terminate this goroutine, channel is closed
@@ -366,6 +368,14 @@ loop:
 			// Wait for the prescribed delay
 			if wait != nil {
 				<-wait
+			}
+
+			// was it cancelled during the wait? check again
+			select {
+			case <-f.q.cancelled:
+				break loop
+			default:
+				// go on
 			}
 
 			switch r, ok := v.(robotCommand); {
