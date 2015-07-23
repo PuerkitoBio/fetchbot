@@ -90,7 +90,7 @@ Disallow: /deny
 		7:  {srv1.URL + "/b", "p"},    // path-specific handler
 		8:  {srv1.URL + "/baba", "q"}, // path-specific handler
 		9:  {srv1.URL + "/b/c", "p"},  // path-specific handler
-		10: {srv1.URL + "/zz", "r"},   // custom predicate
+		10: {srv2.URL + "/zz", "r"},   // custom predicate
 	}
 	// Start the fetcher
 	mux := NewMux()
