@@ -416,45 +416,51 @@ func (f *Fetcher) visit(cmd Command, res *http.Response, err error) {
 	if res != nil && res.Body != nil {
 		defer res.Body.Close()
 	}
+	// if the Command implements Handler, call that handler, otherwise
+	// dispatch to the Fetcher's Handler.
+	if h, ok := cmd.(Handler); ok {
+		h.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
+		return
+	}
 	f.Handler.Handle(&Context{Cmd: cmd, Q: f.q}, res, err)
 }
 
 // Prepare and execute the request for this Command.
-func (f *Fetcher) doRequest(r Command) (*http.Response, error) {
-	req, err := http.NewRequest(r.Method(), r.URL().String(), nil)
+func (f *Fetcher) doRequest(cmd Command) (*http.Response, error) {
+	req, err := http.NewRequest(cmd.Method(), cmd.URL().String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	// If the Command implements some other recognized interfaces, set
 	// the request accordingly (see cmd.go for the list of interfaces).
 	// First, the Header values.
-	if hd, ok := r.(HeaderProvider); ok {
+	if hd, ok := cmd.(HeaderProvider); ok {
 		for k, v := range hd.Header() {
 			req.Header[k] = v
 		}
 	}
 	// BasicAuth has higher priority than an Authorization header set by
 	// a HeaderProvider.
-	if ba, ok := r.(BasicAuthProvider); ok {
+	if ba, ok := cmd.(BasicAuthProvider); ok {
 		req.SetBasicAuth(ba.BasicAuth())
 	}
 	// Cookies are added to the request, even if some cookies were set
 	// by a HeaderProvider.
-	if ck, ok := r.(CookiesProvider); ok {
+	if ck, ok := cmd.(CookiesProvider); ok {
 		for _, c := range ck.Cookies() {
 			req.AddCookie(c)
 		}
 	}
 	// For the body of the request, ReaderProvider has higher priority
 	// than ValuesProvider.
-	if rd, ok := r.(ReaderProvider); ok {
+	if rd, ok := cmd.(ReaderProvider); ok {
 		rdr := rd.Reader()
 		rc, ok := rdr.(io.ReadCloser)
 		if !ok {
 			rc = ioutil.NopCloser(rdr)
 		}
 		req.Body = rc
-	} else if val, ok := r.(ValuesProvider); ok {
+	} else if val, ok := cmd.(ValuesProvider); ok {
 		v := val.Values()
 		req.Body = ioutil.NopCloser(strings.NewReader(v.Encode()))
 		if req.Header.Get("Content-Type") == "" {
