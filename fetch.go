@@ -31,6 +31,10 @@ var (
 	ErrQueueClosed = errors.New("fetchbot: send on a closed queue")
 )
 
+// Parse the robots.txt relative path a single time at startup, this can't
+// return an error.
+var robotsTxtParsedPath, _ = url.Parse("/robots.txt")
+
 const (
 	// DefaultCrawlDelay represents the delay to use if there is no robots.txt
 	// specified delay.
@@ -150,8 +154,14 @@ func (q *Queue) Block() {
 }
 
 // Send enqueues a Command into the Fetcher. If the Queue has been closed, it
-// returns ErrQueueClosed.
+// returns ErrQueueClosed. The Command's URL must have a Host.
 func (q *Queue) Send(c Command) error {
+	if c == nil {
+		return ErrEmptyHost
+	}
+	if u := c.URL(); u == nil || u.Host == "" {
+		return ErrEmptyHost
+	}
 	select {
 	case <-q.closed:
 		return ErrQueueClosed
@@ -242,12 +252,6 @@ loop:
 
 		// Get the URL to enqueue
 		u := v.URL()
-		if u.Host == "" {
-			// The URL must be rooted with a host. Handle on a separate goroutine, the Queue
-			// goroutine must not block.
-			go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, ErrEmptyHost)
-			continue
-		}
 
 		// Check if a channel is already started for this host
 		f.mu.Lock()
@@ -256,17 +260,9 @@ loop:
 			// Start a new channel and goroutine for this host.
 
 			var rob *url.URL
-			var err error
-
 			if !f.DisablePoliteness {
 				// Must send the robots.txt request.
-				rob, err = u.Parse("/robots.txt")
-				if err != nil {
-					f.mu.Unlock()
-					// Handle on a separate goroutine, the Queue goroutine must not block.
-					go f.Handler.Handle(&Context{Cmd: v, Q: f.q}, nil, err)
-					continue
-				}
+				rob = u.ResolveReference(robotsTxtParsedPath)
 			}
 
 			// Create the infinite queue: the in channel to send on, and the out channel
