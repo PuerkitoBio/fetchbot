@@ -23,7 +23,7 @@ The [API documentation is available on godoc.org](http://godoc.org/github.com/Pu
 
 ## Changes
 
-* 2015-07-23 : add `HandlerCmd` and call the Command's `Handler` function if it implements the `Handler` interface, bypassing the `Fetcher`'s handler.
+* 2015-07-24 : add `HandlerCmd` and call the Command's `Handler` function if it implements the `Handler` interface, bypassing the `Fetcher`'s handler. Support a `Custom` matcher on the `Mux`, using a predicate. (thanks to [@mmcdole][mmcdole] for the feature requests).
 * 2015-06-18 : add `Scheme` criteria on the muxer (thanks to [@buro9][buro9]).
 * 2015-06-10 : add `DisablePoliteness` field on the `Fetcher` to optionally bypass robots.txt checks (thanks to [@oli-g][oli]).
 * 2014-07-04 : change the type of Fetcher.HttpClient from `*http.Client` to the `Doer` interface. Low chance of breaking existing code, but it's a possibility if someone used the fetcher's client to run other requests (e.g. `f.HttpClient.Get(...)`).
@@ -166,3 +166,4 @@ the source file).
 
 [oli]: https://github.com/oli-g
 [buro9]: https://github.com/buro9
+[mmcdole]: https://github.com/mmcdole
