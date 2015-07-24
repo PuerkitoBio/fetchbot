@@ -80,17 +80,16 @@ Disallow: /deny
 		url   string
 		trace string
 	}{
-		0:  {"/a", "e"},               // empty host error
-		1:  {srv2.URL + "/none", "d"}, // no specific handler, use default
-		2:  {srv1.URL + "/json", "j"}, // json-specific handler
-		3:  {srv1.URL + "/deny", "a"}, // ErrDisallowed, use any errors handler
-		4:  {srv1.URL + "/a", "g"},    // GET text/html
-		5:  {srv1.URL + "/204", "s"},  // status 204
-		6:  {srv1.URL + "/4xx", "r"},  // status range 4xx
-		7:  {srv1.URL + "/b", "p"},    // path-specific handler
-		8:  {srv1.URL + "/baba", "q"}, // path-specific handler
-		9:  {srv1.URL + "/b/c", "p"},  // path-specific handler
-		10: {srv2.URL + "/zz", "r"},   // custom predicate
+		0: {srv2.URL + "/none", "d"}, // no specific handler, use default
+		1: {srv1.URL + "/json", "j"}, // json-specific handler
+		2: {srv1.URL + "/deny", "a"}, // ErrDisallowed, use any errors handler
+		3: {srv1.URL + "/a", "g"},    // GET text/html
+		4: {srv1.URL + "/204", "s"},  // status 204
+		5: {srv1.URL + "/4xx", "r"},  // status range 4xx
+		6: {srv1.URL + "/b", "p"},    // path-specific handler
+		7: {srv1.URL + "/baba", "q"}, // path-specific handler
+		8: {srv1.URL + "/b/c", "p"},  // path-specific handler
+		9: {srv2.URL + "/zz", "r"},   // custom predicate
 	}
 	// Start the fetcher
 	mux := NewMux()
