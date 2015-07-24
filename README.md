@@ -1,4 +1,4 @@
-# fetchbot
+# fetchbot [![build status](https://secure.travis-ci.org/PuerkitoBio/fetchbot.png)](http://travis-ci.org/PuerkitoBio/fetchbot) [![GoDoc](https://godoc.org/github.com/PuerkitoBio/fetchbot?status.png)](http://godoc.org/github.com/PuerkitoBio/fetchbot)
 
 Package fetchbot provides a simple and flexible web crawler that follows the robots.txt
 policies and crawl delays.
@@ -6,10 +6,6 @@ policies and crawl delays.
 It is very much a rewrite of [gocrawl](https://github.com/PuerkitoBio/gocrawl) with a
 simpler API, less features built-in, but at the same time more flexibility. As for Go
 itself, sometimes less is more!
-
-[![build status](https://secure.travis-ci.org/PuerkitoBio/fetchbot.png)](http://travis-ci.org/PuerkitoBio/fetchbot)
-
-[![GoDoc](https://godoc.org/github.com/PuerkitoBio/fetchbot?status.png)](http://godoc.org/github.com/PuerkitoBio/fetchbot)
 
 ## Installation
 
