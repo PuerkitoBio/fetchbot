@@ -74,9 +74,14 @@ func main() {
 	// Create the Fetcher, handle the logging first, then dispatch to the Muxer
 	h := logHandler(mux)
 	if *stopAtURL != "" || *cancelAtURL != "" {
-		h = stopHandler(*stopAtURL, logHandler(mux))
+		stopURL := *stopAtURL
+		if *cancelAtURL != "" {
+			stopURL = *cancelAtURL
+		}
+		h = stopHandler(stopURL, *cancelAtURL != "", logHandler(mux))
 	}
 	f := fetchbot.New(h)
+
 	// First mem stat print must be right after creating the fetchbot
 	if *memStats > 0 {
 		// Print starting stats
@@ -89,15 +94,27 @@ func main() {
 			printMemStats(nil)
 		}()
 	}
+
 	// Start processing
 	q := f.Start()
-	if *stopAfter > 0 {
+
+	// if a stop or cancel is requested after some duration, launch the goroutine
+	// that will stop or cancel.
+	if *stopAfter > 0 || *cancelAfter > 0 {
+		after := *stopAfter
+		stopFunc := q.Close
+		if *cancelAfter != 0 {
+			after = *cancelAfter
+			stopFunc = q.Cancel
+		}
+
 		go func() {
-			c := time.After(*stopAfter)
+			c := time.After(after)
 			<-c
-			q.Close()
+			stopFunc()
 		}()
 	}
+
 	// Enqueue the seed, which is the first entry in the dup map
 	dup[*seed] = true
 	_, err = q.SendStringGet(*seed)
@@ -149,10 +166,19 @@ func printMemStats(di *fetchbot.DebugInfo) {
 
 // stopHandler stops the fetcher if the stopurl is reached. Otherwise it dispatches
 // the call to the wrapped Handler.
-func stopHandler(stopurl string, wrapped fetchbot.Handler) fetchbot.Handler {
+func stopHandler(stopurl string, cancel bool, wrapped fetchbot.Handler) fetchbot.Handler {
 	return fetchbot.HandlerFunc(func(ctx *fetchbot.Context, res *http.Response, err error) {
 		if ctx.Cmd.URL().String() == stopurl {
-			ctx.Q.Close()
+			fmt.Printf(">>>>> STOP URL %s\n", ctx.Cmd.URL())
+			// generally not a good idea to stop/block from a handler goroutine
+			// so do it in a separate goroutine
+			go func() {
+				if cancel {
+					ctx.Q.Cancel()
+				} else {
+					ctx.Q.Close()
+				}
+			}()
 			return
 		}
 		wrapped.Handle(ctx, res, err)
