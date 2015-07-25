@@ -158,7 +158,7 @@ func TestQueueClosed(t *testing.T) {
 	f := New(nil)
 	q := f.Start()
 	q.Close()
-	_, err := q.SendStringGet("a")
+	_, err := q.SendStringGet("http://host/a")
 	if err != ErrQueueClosed {
 		t.Errorf("expected error %s, got %v", ErrQueueClosed, err)
 	}
@@ -221,7 +221,7 @@ func TestSendVariadic(t *testing.T) {
 
 	// Define the raw URLs to enqueue
 	cases := []string{srv.URL + "/a", srv.URL + "/b", "/nohost", ":"}
-	handled := cases[:len(cases)-1]
+	handled := cases[:len(cases)-2]
 
 	// Start the Fetcher
 	sh := &spyHandler{}
@@ -229,11 +229,11 @@ func TestSendVariadic(t *testing.T) {
 	f.CrawlDelay = 0
 	q := f.Start()
 	n, err := q.SendStringGet(cases...)
-	if n != len(handled) {
-		t.Errorf("expected %d URLs enqueued, got %d", len(handled), n)
+	if n != 2 {
+		t.Errorf("expected %d URLs enqueued, got %d", 2, n)
 	}
-	if _, ok := err.(*url.Error); !ok {
-		t.Errorf("expected parse error, got %v", err)
+	if err != ErrEmptyHost {
+		t.Errorf("expected %v, got %v", ErrEmptyHost, err)
 	}
 	// Stop to wait for all commands to be processed
 	q.Close()
@@ -241,13 +241,9 @@ func TestSendVariadic(t *testing.T) {
 	if ok := sh.CalledWithExactly(handled...); !ok {
 		t.Error("expected handler to be called with valid cases")
 	}
-	// Expect 1 error for empty host
-	if cnt := sh.Errors(); cnt != 1 {
-		t.Errorf("expected 1 error, got %d", cnt)
-	}
-	// Assert that the empty host error is actually that error
-	if err := sh.ErrorFor(handled[len(handled)-1]); err != ErrEmptyHost {
-		t.Errorf("expected error %s for url '%s', got %v", ErrEmptyHost, handled[len(handled)-1], err)
+	// Expect no error
+	if cnt := sh.Errors(); cnt != 0 {
+		t.Errorf("expected no error, got %d", cnt)
 	}
 }
 
@@ -468,7 +464,7 @@ Crawl-delay: 1
 		t.Errorf("expected no errors, got %d", cnt)
 	}
 	// Assert that the total elapsed time is around 4 seconds
-	if delay < 4*time.Second || delay > (4*time.Second+10*time.Millisecond) {
+	if delay < 4*time.Second || delay > (4*time.Second+100*time.Millisecond) {
 		t.Errorf("expected delay to be around 4s, got %s", delay)
 	}
 }

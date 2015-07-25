@@ -85,7 +85,7 @@ func (mux *Mux) Handle(ctx *Context, res *http.Response, err error) {
 		// Find a matching response handler
 		var h Handler
 		var n = -1
-		for r, _ := range mux.res {
+		for r := range mux.res {
 			if ok, cnt := r.match(res); ok {
 				if cnt > n {
 					h, n = r.h, cnt

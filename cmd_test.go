@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -43,24 +44,24 @@ func TestBasicAuth(t *testing.T) {
 		status int
 	}{
 		0: {
-			&basicAuthCmd{&Cmd{U: mustParse(srv.URL + "/a"), M: "GET"}, "me", "you"},
+			&basicAuthCmd{&Cmd{U: mustParse(t, srv.URL+"/a"), M: "GET"}, "me", "you"},
 			http.StatusOK,
 		},
 		1: {
-			&Cmd{U: mustParse(srv.URL + "/b"), M: "GET"},
+			&Cmd{U: mustParse(t, srv.URL+"/b"), M: "GET"},
 			http.StatusUnauthorized,
 		},
 		2: {
-			&basicAuthCmd{&Cmd{U: mustParse(srv.URL + "/c"), M: "GET"}, "some", "other"},
+			&basicAuthCmd{&Cmd{U: mustParse(t, srv.URL+"/c"), M: "GET"}, "some", "other"},
 			http.StatusUnauthorized,
 		},
 		3: {
-			&readerCmd{&Cmd{U: mustParse(srv.URL + "/d"), M: "POST"},
+			&readerCmd{&Cmd{U: mustParse(t, srv.URL+"/d"), M: "POST"},
 				strings.NewReader("a")},
 			http.StatusUnauthorized,
 		},
 		4: {
-			&valuesCmd{&Cmd{U: mustParse(srv.URL + "/e"), M: "POST"},
+			&valuesCmd{&Cmd{U: mustParse(t, srv.URL+"/e"), M: "POST"},
 				url.Values{"k": {"v"}}},
 			http.StatusUnauthorized,
 		},
@@ -143,30 +144,30 @@ func TestBody(t *testing.T) {
 		body string
 	}{
 		0: {
-			&readerCmd{&Cmd{U: mustParse(srv.URL + "/a"), M: "POST"},
+			&readerCmd{&Cmd{U: mustParse(t, srv.URL+"/a"), M: "POST"},
 				strings.NewReader("a")},
 			"a",
 		},
 		1: {
-			&valuesCmd{&Cmd{U: mustParse(srv.URL + "/b"), M: "POST"},
+			&valuesCmd{&Cmd{U: mustParse(t, srv.URL+"/b"), M: "POST"},
 				url.Values{"k": {"v"}}},
 			"k=v",
 		},
 		2: {
-			&Cmd{U: mustParse(srv.URL + "/c"), M: "POST"},
+			&Cmd{U: mustParse(t, srv.URL+"/c"), M: "POST"},
 			"",
 		},
 		3: {
-			&basicAuthCmd{&Cmd{U: mustParse(srv.URL + "/d"), M: "POST"}, "me", "you"},
+			&basicAuthCmd{&Cmd{U: mustParse(t, srv.URL+"/d"), M: "POST"}, "me", "you"},
 			"",
 		},
 		4: {
-			&cookiesCmd{&Cmd{U: mustParse(srv.URL + "/e"), M: "GET"},
+			&cookiesCmd{&Cmd{U: mustParse(t, srv.URL+"/e"), M: "GET"},
 				[]*http.Cookie{&http.Cookie{Name: "e"}}},
 			"e",
 		},
 		5: {
-			&cookiesCmd{&Cmd{U: mustParse(srv.URL + "/f"), M: "GET"},
+			&cookiesCmd{&Cmd{U: mustParse(t, srv.URL+"/f"), M: "GET"},
 				[]*http.Cookie{&http.Cookie{Name: "f1"}, &http.Cookie{Name: "f2"}}},
 			"f1&f2",
 		},
@@ -225,16 +226,16 @@ func TestHeader(t *testing.T) {
 		body string
 	}{
 		0: {
-			&headerCmd{&Cmd{U: mustParse(srv.URL + "/a"), M: "GET"},
+			&headerCmd{&Cmd{U: mustParse(t, srv.URL+"/a"), M: "GET"},
 				http.Header{"A": {"a"}}},
 			"A:a\n",
 		},
 		1: {
-			&Cmd{U: mustParse(srv.URL + "/b"), M: "GET"},
+			&Cmd{U: mustParse(t, srv.URL+"/b"), M: "GET"},
 			"",
 		},
 		2: {
-			&headerCmd{&Cmd{U: mustParse(srv.URL + "/c"), M: "GET"},
+			&headerCmd{&Cmd{U: mustParse(t, srv.URL+"/c"), M: "GET"},
 				http.Header{"C": {"c"}, "D": {"d"}}},
 			"C:c\nD:d\n",
 		},
@@ -330,7 +331,7 @@ func TestFullCmd(t *testing.T) {
 	f.CrawlDelay = 0
 	q := f.Start()
 	cmd := &fullCmd{
-		&Cmd{U: mustParse(srv.URL + "/a"), M: "POST"},
+		&Cmd{U: mustParse(t, srv.URL+"/a"), M: "POST"},
 		"me", "you",
 		strings.NewReader("body"),
 		url.Values{"ignored": {"val"}},
@@ -352,10 +353,55 @@ func TestFullCmd(t *testing.T) {
 	}
 }
 
-func mustParse(raw string) *url.URL {
-	parsed, err := url.Parse(raw)
+func TestHandlerCmd(t *testing.T) {
+	var result int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {}))
+	defer srv.Close()
+
+	cases := []struct {
+		cmd  Command
+		want int32
+	}{
+		0: {
+			mustCmd(NewHandlerCmd("GET", srv.URL+"/a", func(ctx *Context, res *http.Response, err error) {
+				atomic.AddInt32(&result, 1)
+			})), 1,
+		},
+		1: {
+			&Cmd{U: mustParse(t, srv.URL+"/b"), M: "GET"}, -1,
+		},
+	}
+
+	f := New(HandlerFunc(func(ctx *Context, res *http.Response, err error) {
+		atomic.AddInt32(&result, -1)
+	}))
+	f.CrawlDelay = 0
+
+	for i, c := range cases {
+		result = 0
+		q := f.Start()
+		if err := q.Send(c.cmd); err != nil {
+			t.Errorf("%d: error sending command: %s", i, err)
+		}
+		q.Close()
+
+		if result != c.want {
+			t.Errorf("%d: want %d, got %d", i, c.want, result)
+		}
+	}
+}
+
+func mustCmd(cmd Command, err error) Command {
 	if err != nil {
 		panic(err)
+	}
+	return cmd
+}
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return parsed
 }
