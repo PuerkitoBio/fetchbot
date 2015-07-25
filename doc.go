@@ -55,6 +55,8 @@ commands have been handled.
 
 A more complex and complete example can be found in the repository, at /example/full/.
 
+Fetcher
+
 Basically, a Fetcher is an instance of a web crawler, independent of other Fetchers.
 It receives Commands via the Queue, executes the requests, and calls a Handler to
 process the responses. A Command is an interface that tells the Fetcher which URL to
@@ -83,45 +85,66 @@ with the right signature can be used as Handlers (like net/http.HandlerFunc), an
 is also a multiplexer Mux that can be used to dispatch calls to different Handlers
 based on some criteria.
 
-The Fetcher recognizes a number of interfaces that the Command may implement, for
-more advanced needs. If the Command implements the BasicAuthProvider interface,
-a Basic Authentication header will be put in place with the given credentials
-to fetch the URL.
+Command-related Interfaces
 
-Similarly, the CookiesProvider and HeaderProvider interfaces offer the expected
-features (setting cookies and header values on the request). The ReaderProvider
-and ValuesProvider interfaces are also supported, although they should be mutually
-exclusive as they both set the body of the request. If both are supported, the
-ReaderProvider interface is used. It sets the body of the request (e.g. for a "POST")
-using the given io.Reader instance. The ValuesProvider does the same, but using
-the given url.Values instance, and sets the Content-Type of the body to
-"application/x-www-form-urlencoded" (unless it is explicitly set by a HeaderProvider).
+The Fetcher recognizes a number of interfaces that the Command may implement, for
+more advanced needs.
+
+* BasicAuthProvider: Implement this interface to specify the basic authentication
+credentials to set on the request.
+
+* CookiesProvider: If the Command implements this interface, the provided Cookies
+will be set on the request.
+
+* HeaderProvider: Implement this interface to specify the headers to set on the
+request.
+
+* ReaderProvider: Implement this interface to set the body of the request, via
+an io.Reader.
+
+* ValuesProvider: Implement this interface to set the body of the request, as
+form-encoded values. If the Content-Type is not specifically set via a HeaderProvider,
+it is set to "application/x-www-form-urlencoded". ReaderProvider and ValuesProvider
+should be mutually exclusive as they both set the body of the request. If both are
+implemented, the ReaderProvider interface is used.
+
+* Handler: Implement this interface if the Command's response should be handled
+by a specific callback function. By default, the response is handled by the Fetcher's
+Handler, but if the Command implements this, this handler function takes precedence
+and the Fetcher's Handler is ignored.
 
 Since the Command is an interface, it can be a custom struct that holds additional
 information, such as an ID for the URL (e.g. from a database), or a depth counter
 so that the crawling stops at a certain depth, etc. For basic commands that don't
 require additional information, the package provides the Cmd struct that implements
 the Command interface. This is the Command implementation used when using the
-various Queue.SendString* methods.
+various Queue.SendString\* methods.
+
+There is also a convenience HandlerCmd struct for the commands that should be handled
+by a specific callback function. It is a Command with a Handler interface implementation.
+
+Fetcher Options
 
 The Fetcher has a number of fields that provide further customization:
 
-- HttpClient : By default, the Fetcher uses the net/http default Client to make requests. A
+* HttpClient : By default, the Fetcher uses the net/http default Client to make requests. A
 different client can be set on the Fetcher.HttpClient field.
 
-- CrawlDelay : That value is used only if there is no delay specified
+* CrawlDelay : That value is used only if there is no delay specified
 by the robots.txt of a given host.
 
-- UserAgent : Sets the user agent string to use for the requests and to validate
+* UserAgent : Sets the user agent string to use for the requests and to validate
 against the robots.txt entries.
 
-- WorkerIdleTTL : Sets the duration that a worker goroutine can wait without receiving
+* WorkerIdleTTL : Sets the duration that a worker goroutine can wait without receiving
 new commands to fetch. If the idle time-to-live is reached, the worker goroutine
 is stopped and its resources are released. This can be especially useful for
 long-running crawlers.
 
-- DisablePoliteness : If true, disables fetching of robots.txt, effectively
-forcing the use of the CrawlDelay value between calls to a host.
+* AutoClose : If true, closes the queue automatically once the number of active hosts
+reach 0.
+
+* DisablePoliteness : If true, ignores the robots.txt policies of the hosts.
 
 What fetchbot doesn't do - especially compared to gocrawl - is that it doesn't
 keep track of already visited URLs, and it doesn't normalize the URLs. This is outside
