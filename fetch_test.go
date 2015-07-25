@@ -413,7 +413,7 @@ Crawl-delay: 1
 		t.Errorf("expected no errors, got %d", cnt)
 	}
 	// Assert that the total elapsed time is around 2 seconds
-	if delay < 2*time.Second || delay > (2*time.Second+10*time.Millisecond) {
+	if delay < 2*time.Second || delay > (2*time.Second+100*time.Millisecond) {
 		t.Errorf("expected delay to be around 2s, got %s", delay)
 	}
 }
