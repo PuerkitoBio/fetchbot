@@ -716,3 +716,26 @@ func TestCancel(t *testing.T) {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
 }
+
+func TestFetcherHosts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	// Start the Fetcher
+	sh := &spyHandler{}
+	f := New(sh)
+	f.CrawlDelay = 1
+	q := f.Start()
+	if _, err := q.SendStringGet(srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	q.Close()
+	if cnt := sh.Errors(); cnt > 0 {
+		t.Errorf("expected no errors, got %d", cnt)
+	}
+	if f.HostExists(srv.URL) == false {
+		t.Errorf("expected the srv host has handled by a fetcher, but not.\n")
+	}
+}
