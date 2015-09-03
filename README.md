@@ -31,29 +31,31 @@ The following example (taken from /example/short/main.go) shows how to create an
 start a Fetcher, one way to send commands, and how to stop the fetcher once all
 commands have been handled.
 
-    package main
+```go
+package main
 
-    import (
-    	"fmt"
-    	"net/http"
+import (
+	"fmt"
+	"net/http"
 
-    	"github.com/PuerkitoBio/fetchbot"
-    )
+	"github.com/PuerkitoBio/fetchbot"
+)
 
-    func main() {
-    	f := fetchbot.New(fetchbot.HandlerFunc(handler))
-    	queue := f.Start()
-    	queue.SendStringHead("http://google.com", "http://golang.org", "http://golang.org/doc")
-    	queue.Close()
-    }
+func main() {
+	f := fetchbot.New(fetchbot.HandlerFunc(handler))
+	queue := f.Start()
+	queue.SendStringHead("http://google.com", "http://golang.org", "http://golang.org/doc")
+	queue.Close()
+}
 
-    func handler(ctx *fetchbot.Context, res *http.Response, err error) {
-    	if err != nil {
-    		fmt.Printf("error: %s\n", err)
-    		return
-    	}
-    	fmt.Printf("[%d] %s %s\n", res.StatusCode, ctx.Cmd.Method(), ctx.Cmd.URL())
-    }
+func handler(ctx *fetchbot.Context, res *http.Response, err error) {
+	if err != nil {
+		fmt.Printf("error: %s\n", err)
+		return
+	}
+	fmt.Printf("[%d] %s %s\n", res.StatusCode, ctx.Cmd.Method(), ctx.Cmd.URL())
+}
+```
 
 A more complex and complete example can be found in the repository, at /example/full/.
 
@@ -70,13 +72,15 @@ thread-safe object that can be used to send commands, or to stop the crawler.
 Both the Command and the Handler are interfaces, and may be implemented in various ways.
 They are defined like so:
 
-    type Command interface {
-    	URL() *url.URL
-    	Method() string
-    }
-    type Handler interface {
-    	Handle(*Context, *http.Response, error)
-    }
+```go
+type Command interface {
+	URL() *url.URL
+	Method() string
+}
+type Handler interface {
+	Handle(*Context, *http.Response, error)
+}
+```
 
 A **Context** is a struct that holds the Command and the Queue, so that the Handler always
 knows which Command initiated this call, and has a handle to the Queue.
