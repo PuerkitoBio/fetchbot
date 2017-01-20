@@ -205,6 +205,18 @@ func enqueueLinks(ctx *fetchbot.Context, doc *goquery.Document) {
 			fmt.Printf("error: resolve URL %s - %s\n", val, err)
 			return
 		}
+
+		// check whether or not the link is an email link
+		emailCheck := false
+		func(s string, emailCheck *bool) {
+			if strings.Contains(s, "mailto:") {
+				*emailCheck = true
+			}
+		}(u.String(), &emailCheck)
+		if emailCheck == true {
+			return
+		}
+
 		if !dup[u.String()] {
 			if _, err := ctx.Q.SendStringHead(u.String()); err != nil {
 				fmt.Printf("error: enqueue head %s - %s\n", u, err)
