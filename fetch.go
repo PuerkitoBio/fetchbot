@@ -104,6 +104,16 @@ type DebugInfo struct {
 	NumHosts int
 }
 
+// HostExists returns if the given host has dedicated channel or not.
+func (f *Fetcher) HostExists(host string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.hosts[host]; ok {
+		return false
+	}
+	return true
+}
+
 // New returns an initialized Fetcher.
 func New(h Handler) *Fetcher {
 	return &Fetcher{
