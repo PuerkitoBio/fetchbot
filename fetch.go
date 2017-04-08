@@ -74,6 +74,10 @@ type Fetcher struct {
 	// this is a breaking change, won't fix.
 	HttpClient Doer
 
+	// The Doer to use for a specific command. If nil, falls back to HttpClient
+	// field, and then the net/http default client.
+	HTTPClientFunc func(cmd Command) Doer
+
 	// The user-agent string to use for robots.txt validation and URL fetching.
 	UserAgent string
 
@@ -424,6 +428,16 @@ loop:
 	f.q.wg.Done()
 }
 
+func (f *Fetcher) getHTTPDoer(cmd Command) Doer {
+	if f.HTTPClientFunc != nil {
+		return f.HTTPClientFunc(cmd)
+	}
+	if f.HttpClient != nil {
+		return f.HttpClient
+	}
+	return http.DefaultClient
+}
+
 // Get the robots.txt User-Agent-specific group.
 func (f *Fetcher) getRobotAgent(r robotCommand) *robotstxt.Group {
 	res, err := f.doRequest(r)
@@ -506,7 +520,7 @@ func (f *Fetcher) doRequest(cmd Command) (*http.Response, error) {
 		req.Header.Set("User-Agent", f.UserAgent)
 	}
 	// Do the request.
-	res, err := f.HttpClient.Do(req)
+	res, err := f.getHTTPDoer(cmd).Do(req)
 	if err != nil {
 		return nil, err
 	}
