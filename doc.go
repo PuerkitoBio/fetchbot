@@ -130,6 +130,9 @@ The Fetcher has a number of fields that provide further customization:
 * HttpClient : By default, the Fetcher uses the net/http default Client to make requests. A
 different client can be set on the Fetcher.HttpClient field.
 
+* HttpClientFunc : For customization of the http client on a per-request basis, this
+function will be called when available.
+
 * CrawlDelay : That value is used only if there is no delay specified
 by the robots.txt of a given host.
 
