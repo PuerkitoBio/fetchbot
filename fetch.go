@@ -156,6 +156,10 @@ func (q *Queue) Block() {
 	<-q.done
 }
 
+func (q *Queue) Done() <-chan struct{} {
+	return q.done
+}
+
 // Cancel closes the Queue and drains the pending commands without processing
 // them, allowing for a fast "stop immediately"-ish operation.
 func (q *Queue) Cancel() error {
