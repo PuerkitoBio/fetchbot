@@ -427,6 +427,11 @@ loop:
 		}
 	}
 
+	// need to drain ch until it is closed, to prevent the producer goroutine
+	// from leaking.
+	for _ = range ch {
+	}
+
 	f.q.wg.Done()
 }
 

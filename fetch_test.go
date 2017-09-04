@@ -5,10 +5,12 @@
 package fetchbot
 
 import (
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -715,4 +717,72 @@ func TestCancel(t *testing.T) {
 	if cnt := sh.Errors(); cnt > 0 {
 		t.Errorf("expected no errors, got %d", cnt)
 	}
+}
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestGoroLeak(t *testing.T) {
+	callCount := 0
+	f := New(HandlerFunc(func(c *Context, res *http.Response, err error) {
+		// sleep a bit so that it produces faster than it consumes
+		callCount++
+		time.Sleep(time.Millisecond)
+	}))
+
+	f.HttpClient = doerFunc(func(req *http.Request) (*http.Response, error) {
+		res := httptest.NewRecorder()
+		return res.Result(), nil
+	})
+
+	f.DisablePoliteness = true
+	f.CrawlDelay = 0
+
+	startGoros := runtime.NumGoroutine()
+	q := f.Start()
+
+	// start a goro that enqueues a new URL (always on the same domain)
+	// until Send fails.
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	counter := 0
+	go func() {
+		defer wg.Done()
+		for {
+			counter++
+			_, err := q.SendStringGet(fmt.Sprintf("http://example.com/%d", counter))
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	<-time.After(100 * time.Millisecond)
+	q.Cancel()
+	wg.Wait()
+
+	// if the race detector is set, may fail if num goroutine checked
+	// immediately. But under normal circumstances, the goroutines
+	// are released when Cancel/Close returns.
+	time.Sleep(10 * time.Millisecond)
+
+	cancelGoros := runtime.NumGoroutine()
+
+	// should have sent a lot of URLs
+	if counter < 10*callCount {
+		t.Errorf("want many more Send than Calls, got %d and %d", counter, callCount)
+	}
+	// should have received between 10-100 calls
+	if callCount < 10 || callCount > 100 {
+		t.Errorf("want at least 10 and no more than 100 handler calls, got %d", callCount)
+	}
+	// should have the same number of goroutines as there was at the start
+	if startGoros != cancelGoros {
+		t.Errorf("want %d goros like there was at the start, got %d (leak)", startGoros, cancelGoros)
+	}
+
+	t.Logf("start: %d, cancel: %d, counter: %d, calls: %d", startGoros, cancelGoros, counter, callCount)
 }
