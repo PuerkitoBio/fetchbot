@@ -1,4 +1,4 @@
-# fetchbot [![build status](https://secure.travis-ci.org/PuerkitoBio/fetchbot.png)](http://travis-ci.org/PuerkitoBio/fetchbot) [![GoDoc](https://godoc.org/github.com/PuerkitoBio/fetchbot?status.png)](http://godoc.org/github.com/PuerkitoBio/fetchbot)
+# fetchbot [![build status](https://secure.travis-ci.org/PuerkitoBio/fetchbot.svg)](http://travis-ci.org/PuerkitoBio/fetchbot) [![GoDoc](https://godoc.org/github.com/PuerkitoBio/fetchbot?status.svg)](http://godoc.org/github.com/PuerkitoBio/fetchbot)
 
 Package fetchbot provides a simple and flexible web crawler that follows the robots.txt
 policies and crawl delays.
@@ -19,6 +19,7 @@ The [API documentation is available on godoc.org](http://godoc.org/github.com/Pu
 
 ## Changes
 
+* 2017-09-04 (v1.1.1): fix a goroutine leak when cancelling a Queue (issue #26, thanks to [@ryu-koui][ryu] for raising the issue).
 * 2017-07-06 (v1.1.0): add `Queue.Done` to get the done channel on the queue, allowing to wait in a `select` statement (thanks to [@DennisDenuto][denuto]).
 * 2015-07-25 (v1.0.0) : add `Cancel` method on the `Queue`, to close and drain without requesting any pending commands, unlike `Close` that waits for all pending commands to be processed (thanks to [@buro9][buro9] for the feature request).
 * 2015-07-24 : add `HandlerCmd` and call the Command's `Handler` function if it implements the `Handler` interface, bypassing the `Fetcher`'s handler. Support a `Custom` matcher on the `Mux`, using a predicate. (thanks to [@mmcdole][mmcdole] for the feature requests).
@@ -170,4 +171,5 @@ the source file).
 [buro9]: https://github.com/buro9
 [mmcdole]: https://github.com/mmcdole
 [denuto]: https://github.com/DennisDenuto
+[ryu]: https://github.com/ryu-koui
 
