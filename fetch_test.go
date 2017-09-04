@@ -734,8 +734,7 @@ func TestGoroLeak(t *testing.T) {
 	}))
 
 	f.HttpClient = doerFunc(func(req *http.Request) (*http.Response, error) {
-		res := httptest.NewRecorder()
-		return res.Result(), nil
+		return &http.Response{Request: req, StatusCode: 200}, nil
 	})
 
 	f.DisablePoliteness = true
@@ -780,7 +779,7 @@ func TestGoroLeak(t *testing.T) {
 		t.Errorf("want at least 10 and no more than 100 handler calls, got %d", callCount)
 	}
 	// should have the same number of goroutines as there was at the start
-	if startGoros != cancelGoros {
+	if startGoros < cancelGoros {
 		t.Errorf("want %d goros like there was at the start, got %d (leak)", startGoros, cancelGoros)
 	}
 
