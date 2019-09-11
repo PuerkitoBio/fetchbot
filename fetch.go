@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/temoto/robotstxt-go"
+	"github.com/temoto/robotstxt"
 )
 
 var (

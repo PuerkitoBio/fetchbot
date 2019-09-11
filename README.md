@@ -13,7 +13,7 @@ To install, simply run in a terminal:
 
     go get github.com/PuerkitoBio/fetchbot
 
-The package has a single external dependency, [robotstxt](https://github.com/temoto/robotstxt-go). It also integrates code from the [iq package](https://github.com/kylelemons/iq).
+The package has a single external dependency, [robotstxt](https://github.com/temoto/robotstxt). It also integrates code from the [iq package](https://github.com/kylelemons/iq).
 
 The [API documentation is available on godoc.org](http://godoc.org/github.com/PuerkitoBio/fetchbot).
 
