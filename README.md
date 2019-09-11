@@ -19,6 +19,7 @@ The [API documentation is available on godoc.org](http://godoc.org/github.com/Pu
 
 ## Changes
 
+* 2019-09-11 (v1.2.0): update robotstxt dependency (import path/repo URL has changed, issue #31, thanks to [@michael-stevens][michael-stevens] for raising the issue).
 * 2017-09-04 (v1.1.1): fix a goroutine leak when cancelling a Queue (issue #26, thanks to [@ryu-koui][ryu] for raising the issue).
 * 2017-07-06 (v1.1.0): add `Queue.Done` to get the done channel on the queue, allowing to wait in a `select` statement (thanks to [@DennisDenuto][denuto]).
 * 2015-07-25 (v1.0.0) : add `Cancel` method on the `Queue`, to close and drain without requesting any pending commands, unlike `Close` that waits for all pending commands to be processed (thanks to [@buro9][buro9] for the feature request).
@@ -172,4 +173,5 @@ the source file).
 [mmcdole]: https://github.com/mmcdole
 [denuto]: https://github.com/DennisDenuto
 [ryu]: https://github.com/ryu-koui
+[michael-stevens]: https://github.com/michael-stevens
 
