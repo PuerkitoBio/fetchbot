@@ -93,7 +93,7 @@ func (mux *Mux) Handle(ctx *Context, res *http.Response, err error) {
 		for r := range mux.res {
 			if ok, cnt, crit := r.match(res); ok {
 				if cnt > n {
-					h, crit, n = r.h, crit, cnt
+					h, criteria, n = r.h, crit, cnt
 					continue
 				}
 				if cnt == n && crit > criteria {
