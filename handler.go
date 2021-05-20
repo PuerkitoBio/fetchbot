@@ -39,12 +39,16 @@ func (h HandlerFunc) Handle(ctx *Context, res *http.Response, err error) {
 // it will be called. Otherwise, if there is a Handler registered for any error,
 // this Handler will be called.
 //
-// For Response Handlers, a match with a path criteria has higher priority than other
-// matches, and the longer path match will get called.
+// For Response Handlers, a match with a path criteria has higher priority than
+// other matches, and the longer path match takes priority.
 //
-// If multiple Response handlers with the same path length (or no path criteria)
-// match a response, the actual handler called is undefined, but one and only one
-// will be called.
+// If multiple Response Handlers match with the same path length (or no path
+// criteria), the Handler with the greatest number of matching criteria is
+// called.
+//
+// If there are multiple Response handlers with the same path length (or no
+// path criteria) and the same number of matching criteria, the actual handler
+// called is undefined, but one and only one will be called.
 //
 // In any case, if no Handler matches, the DefaultHandler is called, and it
 // defaults to a no-op.
@@ -84,11 +88,16 @@ func (mux *Mux) Handle(ctx *Context, res *http.Response, err error) {
 	} else {
 		// Find a matching response handler
 		var h Handler
+		var criteria = -1
 		var n = -1
 		for r := range mux.res {
-			if ok, cnt := r.match(res); ok {
+			if ok, cnt, crit := r.match(res); ok {
 				if cnt > n {
-					h, n = r.h, cnt
+					h, criteria, n = r.h, crit, cnt
+					continue
+				}
+				if cnt == n && crit > criteria {
+					h, criteria = r.h, crit
 				}
 			}
 		}
@@ -138,44 +147,51 @@ type ResponseMatcher struct {
 
 // match indicates if the response Handler matches the provided response, and if so,
 // and if a path criteria is specified, it also indicates the length of the path match.
-func (r *ResponseMatcher) match(res *http.Response) (bool, int) {
+func (r *ResponseMatcher) match(res *http.Response) (bool, int, int) {
+	var criteria int
 	if r.method != "" {
 		if r.method != res.Request.Method {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.contentType != "" {
 		if r.contentType != getContentType(res.Header.Get("Content-Type")) {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.minStatus != 0 || r.maxStatus != 0 {
 		if res.StatusCode < r.minStatus || res.StatusCode > r.maxStatus {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.scheme != "" {
 		if res.Request.URL.Scheme != r.scheme {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.host != "" {
 		if res.Request.URL.Host != r.host {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.predicate != nil {
 		if !r.predicate(res) {
-			return false, 0
+			return false, 0, 0
 		}
+		criteria++
 	}
 	if r.path != "" {
-		if strings.HasPrefix(res.Request.URL.Path, r.path) {
-			return true, len(r.path)
+		if !strings.HasPrefix(res.Request.URL.Path, r.path) {
+			return false, 0, 0
 		}
-		return false, 0
+		criteria++
 	}
-	return true, 0
+	return true, len(r.path), criteria
 }
 
 // Returns the content type stripped of any additional parameters (following the ;).
